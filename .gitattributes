@@ -1,0 +1,5 @@
+*.md text eol=lf
+*.xlsx binary
+*.hwpx binary
+*.hwp binary
+*.pdf binary

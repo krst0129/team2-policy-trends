@@ -1,0 +1,6 @@
+# Excel/Hangul lock and temp files
+~$*
+*.tmp
+.~lock.*
+Thumbs.db
+desktop.ini
