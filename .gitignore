@@ -4,3 +4,9 @@
 .~lock.*
 Thumbs.db
 desktop.ini
+
+# v2 dashboard
+node_modules/
+.env
+runs/*/원자료/
+runs/*/그림/
