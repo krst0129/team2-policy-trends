@@ -1,0 +1,11 @@
+{
+  "name": "policy-trends-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "과학기술정책 동향 조사 대시보드 (신흥기술영향평가 2인1조)",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node engine/server.js"
+  }
+}

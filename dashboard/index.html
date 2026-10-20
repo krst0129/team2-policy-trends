@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>정책 동향 대시보드</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar"><div class="topbar-in">
+  <div class="brand"><h1>과학기술정책 동향 조사 대시보드</h1><p>키워드·기간으로 국내외 자료를 조사하고, 링크 검증을 통과한 자료만으로 목록과 보고서를 만듭니다</p></div>
+  <div class="top-actions">
+    <label>실행자 <select id="runner"></select></label>
+    <span id="claudeBadge" class="badge">Claude Code 확인 중…</span>
+    <button id="gitPull" class="nav-btn" title="GitHub에서 최신 실행 결과를 받아옵니다">GitHub 동기화</button>
+  </div>
+</div></header>
+
+<main>
+  <section id="handoffInbox" class="card notice" hidden></section>
+
+  <div class="layout-top">
+    <section class="card">
+      <div class="card-h"><h2>조사 조건</h2></div>
+      <label class="lbl" for="kwInput">정책 조사 키워드 넣기 <span class="hint">하나라도 포함 · Enter로 추가</span></label>
+      <div class="tags" id="kwBox"><input id="kwInput" placeholder="예: 딥테크, 기술사업화"></div>
+      <label class="lbl" for="kwEnInput">해외 검색어(영문) <span class="hint">비우면 자동 생성</span></label>
+      <div class="tags" id="kwEnBox"><input id="kwEnInput" placeholder="예: deep tech"></div>
+      <span class="lbl">정책 키워드 조사기간 <span class="hint">최대 1년</span></span>
+      <div class="dates"><input type="date" id="start" aria-label="시작일"><span>~</span><input type="date" id="end" aria-label="종료일"></div>
+      <div class="presets"><button class="ghost" data-months="1">1개월</button><button class="ghost" data-months="3">3개월</button><button class="ghost" data-months="6">6개월</button><button class="ghost" data-months="12">1년</button></div>
+      <span class="lbl">상대 담당 영역 처리 <span class="hint" id="otherRegionHint"></span></span>
+      <div class="radios">
+        <label><input type="radio" name="handoff" value="self" checked> 직접 조사 (국내·해외 모두)</label>
+        <label><input type="radio" name="handoff" value="handoff"> 상대에게 넘기기</label>
+      </div>
+      <details class="sources"><summary>출처 선택 <span class="hint" id="srcCount"></span></summary><div class="groups" id="groups"></div></details>
+      <div class="btn-row"><button id="runBtn" class="primary">조사 및 발간</button></div>
+      <div id="runMsg" class="msg"></div>
+      <label class="lbl" for="runSelect">실행 기록</label>
+      <select id="runSelect" style="width:100%"></select>
+    </section>
+
+    <div class="right-col">
+      <div class="kpis" id="kpis"></div>
+      <div class="charts">
+        <section class="card">
+          <div class="card-h"><h2>주제별 개수</h2><button id="clearFilter" class="ghost" hidden>전체 보기</button></div>
+          <p class="hint">막대를 누르면 목록이 그 주제로 걸러집니다 · 회색은 기타</p>
+          <div id="topicChart" class="chart"><p class="empty">조사를 실행하면 표시됩니다</p></div>
+        </section>
+        <section class="card">
+          <div class="card-h"><h2>주별 추이</h2><select id="trendTopic" aria-label="주제 선택"><option value="">전체 보기</option></select></div>
+          <div id="trendChart" class="chart"><p class="empty">조사를 실행하면 표시됩니다</p></div>
+          <p class="hint">점에 마우스를 올리면 해당 주의 건수가 보입니다</p>
+        </section>
+      </div>
+      <section class="card" id="statusCard">
+        <div class="card-h"><h2>진행 상태</h2><div class="btn-row" id="statusActions" style="margin:0"></div></div>
+        <div id="statusBox"><p class="empty">아직 실행한 조사가 없습니다</p></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="layout-list">
+    <section class="card">
+      <div class="card-h">
+        <h2>정책 키워드 조사자료 목록 <small id="listCount"></small></h2>
+        <div class="btn-row" style="margin:0">
+          <input id="search" class="search" type="search" placeholder="제목·기관 검색">
+          <select id="regionFilter" aria-label="국내외"><option value="">국내·해외</option><option value="domestic">국내</option><option value="overseas">해외</option></select>
+          <button id="csvBtn" class="cta">CSV 파일 내보내기</button>
+        </div>
+      </div>
+      <div class="chips" id="topicChips"></div>
+      <div class="table-wrap"><table id="itemTable"><tr><td class="empty">조사를 실행하면 표시됩니다</td></tr></table></div>
+    </section>
+    <section class="card">
+      <div class="card-h"><h2>검증 보류 목록 <small id="pendCount"></small></h2></div>
+      <p class="hint">자동 검증을 못 한 자료입니다. 목록·그래프·보고서에는 넣지 않았습니다.</p>
+      <ul class="plist" id="pendingList"></ul>
+    </section>
+  </div>
+
+  <div class="layout-bottom">
+    <section class="card">
+      <div class="card-h"><h2>키워드 분석</h2></div>
+      <p class="hint">제목에 함께 자주 나온 단어 — 분류표 밖의 새 흐름을 찾는 참고용</p>
+      <div id="clusters" class="clusters" style="margin-top:8px"></div>
+    </section>
+    <section class="card" id="reportCard">
+      <div class="card-h"><h2>정책조사 보고서</h2></div>
+      <p id="reportTitle" class="report-title"></p>
+      <div class="report-preview"><iframe id="reportFrame" title="보고서 미리보기"></iframe></div>
+      <h3>정책 보고서 내보내기</h3>
+      <div class="btn-row" style="margin:0">
+        <button id="expHwpx" class="primary">hwpx</button>
+        <button id="expPdf" class="primary">PDF</button>
+        <button id="expWeb" class="primary" title="서버 없이 어디서나 열리는 결과 웹페이지(HTML 한 장)">웹페이지</button>
+        <button id="pushBtn" class="ghost">GitHub에 올리기</button>
+      </div>
+      <div id="expMsg" class="msg"></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="issueDlg">
+  <form method="dialog">
+    <h2>넘김 요청 Issue</h2>
+    <p class="hint">내용을 확인하고 고친 뒤 올리세요. 올리면 상대에게 GitHub 알림이 갑니다.</p>
+    <label class="lbl">제목<input id="issueTitle"></label>
+    <label class="lbl">내용<textarea id="issueBody" rows="10"></textarea></label>
+    <div class="btn-row"><button value="cancel" class="ghost">닫기</button><button id="issuePost" value="post" class="primary">Issue 올리기</button></div>
+  </form>
+</dialog>
+<script type="module" src="app.js"></script>
+</body>
+</html>

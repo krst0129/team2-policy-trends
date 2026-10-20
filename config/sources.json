@@ -1,0 +1,29 @@
+{
+  "_설명": "자료조사처 목록. method: koreakr/naver/google/gdelt/fedreg/govuk 는 엔진이 직접 수집, claude 는 Claude Code가 domains 안에서 검색·열람해 후보를 찾는다. 어떤 방법으로 찾든 링크 검증기를 통과해야 목록에 들어간다.",
+  "groups": [
+    { "id": "dom_gov", "region": "domestic", "name": "정부·공공기관 보도자료" },
+    { "id": "dom_pres", "region": "domestic", "name": "대통령실·국가과학기술자문회의" },
+    { "id": "dom_research", "region": "domestic", "name": "정책 보고서·국책연구기관" },
+    { "id": "dom_program", "region": "domestic", "name": "지원기관 공고·예산" },
+    { "id": "dom_law", "region": "domestic", "name": "법령" },
+    { "id": "dom_press", "region": "domestic", "name": "국내 언론" },
+    { "id": "ovs_gov", "region": "overseas", "name": "해외 정부·공공기관 보도자료" },
+    { "id": "ovs_research", "region": "overseas", "name": "해외 정책 보고서·국제기구" },
+    { "id": "ovs_press", "region": "overseas", "name": "해외 언론" }
+  ],
+  "sources": [
+    { "id": "koreakr", "group": "dom_gov", "name": "대한민국 정책브리핑(전 부처 보도자료)", "method": "koreakr", "type": "보도자료", "url": "https://www.korea.kr" },
+    { "id": "dom_ministries", "group": "dom_gov", "name": "과기정통부·중기부·산업통상부·지식재산처·기획예산처 누리집", "method": "claude", "type": "보도자료", "domains": ["msit.go.kr", "mss.go.kr", "motir.go.kr", "kipo.go.kr", "mpb.go.kr"] },
+    { "id": "president", "group": "dom_pres", "name": "대통령실·국가과학기술자문회의", "method": "claude", "type": "정책 동향", "domains": ["president.go.kr", "pacst.go.kr"] },
+    { "id": "dom_research", "group": "dom_research", "name": "KISTEP·STEPI·KDI·KIET·NST·NKIS", "method": "claude", "type": "정책 보고서", "domains": ["kistep.re.kr", "stepi.re.kr", "kdi.re.kr", "eiec.kdi.re.kr", "kiet.re.kr", "nst.re.kr", "nkis.re.kr"] },
+    { "id": "dom_program", "group": "dom_program", "name": "NTIS·기업마당·K-Startup·창업진흥원·TIPA·KIAT·한국연구재단", "method": "claude", "type": "사업공고/예산", "domains": ["ntis.go.kr", "bizinfo.go.kr", "k-startup.go.kr", "kised.or.kr", "tipa.or.kr", "kiat.or.kr", "nrf.re.kr", "compa.re.kr", "innopolis.or.kr"] },
+    { "id": "dom_law", "group": "dom_law", "name": "국가법령정보센터·국민참여입법센터", "method": "claude", "type": "법령", "domains": ["law.go.kr", "opinion.lawmaking.go.kr", "moleg.go.kr"] },
+    { "id": "naver", "group": "dom_press", "name": "네이버 뉴스 검색 API", "method": "naver", "type": "뉴스 기사", "needs": ["NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"] },
+    { "id": "google", "group": "dom_press", "name": "Google 검색 API", "method": "google", "type": "뉴스 기사", "needs": ["GOOGLE_API_KEY", "GOOGLE_CSE_ID"] },
+    { "id": "fedreg", "group": "ovs_gov", "name": "미국 Federal Register", "method": "fedreg", "type": "보도자료", "url": "https://www.federalregister.gov" },
+    { "id": "govuk", "group": "ovs_gov", "name": "영국 GOV.UK", "method": "govuk", "type": "보도자료", "url": "https://www.gov.uk" },
+    { "id": "ovs_gov_web", "group": "ovs_gov", "name": "미국 백악관·NSF·상무부, EU 집행위, 일본 내각부·경제산업성·문부과학성, 중국 국무원·과학기술부", "method": "claude", "type": "보도자료", "domains": ["whitehouse.gov", "nsf.gov", "commerce.gov", "ec.europa.eu", "commission.europa.eu", "cao.go.jp", "meti.go.jp", "mext.go.jp", "gov.cn", "most.gov.cn"] },
+    { "id": "ovs_research", "group": "ovs_research", "name": "OECD·각국 정책 보고서", "method": "claude", "type": "해외 정책자료", "domains": ["oecd.org", "nist.gov", "nber.org", "brookings.edu", "rieti.go.jp", "bruegel.org"] },
+    { "id": "gdelt", "group": "ovs_press", "name": "GDELT(전 세계 언론 색인)", "method": "gdelt", "type": "해외 언론", "note": "GDELT 기사 검색은 최근 약 3개월까지만 지원" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "members": [
+    { "id": "eunseong", "name": "김은성", "github": "krst0129", "region": "domestic" },
+    { "id": "chaelim", "name": "김채림", "github": "chaelim37", "region": "overseas" }
+  ],
+  "regions": {
+    "domestic": "국내",
+    "overseas": "해외"
+  },
+  "repo": "krst0129/team2-policy-trends"
+}

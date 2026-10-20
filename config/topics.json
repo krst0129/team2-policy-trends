@@ -1,0 +1,13 @@
+{
+  "_설명": "기본 주제 분류표. 자료 하나에 주제 하나만 붙인다. keywords는 규칙 기반 분류에 쓰며 자유롭게 고쳐도 된다. 순서가 앞일수록 동점일 때 우선한다.",
+  "topics": [
+    { "id": "rnd", "name": "R&D 투자·예산", "keywords": ["예산", "예산안", "R&D", "연구개발", "투자", "재정", "기금", "budget", "funding", "appropriation", "grant", "investment"] },
+    { "id": "startup", "name": "창업·기술사업화", "keywords": ["창업", "스타트업", "사업화", "기술이전", "벤처", "실험실", "딥테크", "유니콘", "스케일업", "startup", "start-up", "commercialization", "commercialisation", "spin-off", "spinout", "venture", "scale-up", "deep tech", "licensing"] },
+    { "id": "talent", "name": "인력·교육", "keywords": ["인재", "인력", "교육", "연구자", "대학", "과학기술원", "양성", "talent", "workforce", "education", "STEM", "researcher", "university", "skills"] },
+    { "id": "law", "name": "법·제도·규제", "keywords": ["법률", "법안", "시행령", "규제", "제도", "개정", "입법", "국무회의", "특례", "regulation", "act", "law", "rule", "bill", "legislation", "directive"] },
+    { "id": "industry", "name": "산업·통상", "keywords": ["산업", "통상", "수출", "공급망", "반도체", "제조", "소부장", "관세", "industry", "industrial", "trade", "export", "supply chain", "manufacturing", "tariff", "semiconductor"] },
+    { "id": "digital", "name": "AI·디지털", "keywords": ["AI", "인공지능", "디지털", "데이터", "양자", "클라우드", "피지컬", "artificial intelligence", "digital", "data", "quantum", "cloud", "computing"] },
+    { "id": "global", "name": "국제협력", "keywords": ["협력", "MOU", "국제", "글로벌", "공동", "해외", "양자협력", "cooperation", "partnership", "bilateral", "international", "alliance", "agreement"] },
+    { "id": "etc", "name": "기타", "keywords": [] }
+  ]
+}
