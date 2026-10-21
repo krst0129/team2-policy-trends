@@ -92,9 +92,12 @@ async function gdelt({ keywordsEn, start, end }, src, log) {
   const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(q + ' sourcelang:english')}&mode=ArtList&maxrecords=250&format=json&sort=DateDesc&startdatetime=${s.replace(/-/g, '')}000000&enddatetime=${end.replace(/-/g, '')}235959`;
   let status, text;
   for (let attempt = 1; attempt <= 4; attempt++) {
-    ({ status, text } = await fetchText(url, { timeout: 40000 }));
-    if (status !== 429) break;
-    log(`GDELT 요청 간격 제한 — ${attempt * 6}초 뒤 다시 시도`);
+    // GDELT sometimes drops the connection ("fetch failed") as well as answering 429: retry both
+    try { ({ status, text } = await fetchText(url, { timeout: 40000 })); }
+    catch (e) { status = 0; text = e.message; }
+    if (status !== 429 && status !== 0) break;
+    if (attempt === 4) break;
+    log(`GDELT ${status === 429 ? '요청 간격 제한' : '접속 실패'} — ${attempt * 6}초 뒤 다시 시도`);
     await sleep(attempt * 6000);
   }
   if (status !== 200 || !text.trim().startsWith('{')) { log(`GDELT 응답 오류 ${status}: ${text.slice(0, 120)}`); return []; }
@@ -142,6 +145,36 @@ async function govuk({ keywordsEn, start, end }, src, log) {
   return out;
 }
 
+// Official RSS/Atom feeds (NSF, NIST, DOE, EU Commission …). Feeds only carry the latest
+// items, so this catches recent releases; a candidate needs an English keyword in its title or summary.
+const tagText = (block, tag) => stripTags(block.match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${tag}>`, 'i'))?.[1] || '');
+function feedItems(xml) {
+  return [...xml.matchAll(/<(item|entry)[\s>][\s\S]*?<\/\1>/gi)].map(([b]) => ({
+    title: tagText(b, 'title'),
+    url: (tagText(b, 'link') || b.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] || '').trim(),
+    date: parseLooseDate(tagText(b, 'pubDate') || tagText(b, 'dc:date') || tagText(b, 'published') || tagText(b, 'updated')),
+    snippet: (tagText(b, 'description') || tagText(b, 'summary') || tagText(b, 'content')).slice(0, 300),
+  }));
+}
+async function rss({ keywordsEn, start, end }, src, log) {
+  if (!keywordsEn.length) return { skipped: '영문 검색어 없음' };
+  const hit = (t) => keywordsEn.some((k) => new RegExp(`(^|[^a-z0-9])${k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[\\s-]+')}([^a-z0-9]|$)`, 'i').test(t));
+  const out = [];
+  for (const feed of src.feeds) {
+    try {
+      const { status, text } = await fetchText(feed.url);
+      if (status !== 200) { log(`${feed.org} RSS 응답 ${status} — 건너뜀`); continue; }
+      for (const it of feedItems(text)) {
+        if (!it.title || !it.url.startsWith('http') || !inRange(it.date, start, end)) continue;
+        if (!hit(`${it.title} ${it.snippet}`)) continue;
+        out.push({ ...it, org: feed.org, country: feed.country, type: src.type, keyword: keywordsEn.join(', ') });
+      }
+    } catch (e) { log(`${feed.org} RSS 오류: ${e.message}`); }
+  }
+  log(`${src.name}: 후보 ${out.length}건`);
+  return out;
+}
+
 // ---------- Claude Code 조사 (API가 없는 출처) ----------
 async function claudeResearch(inputs, srcs, region, workDir, log) {
   const list = srcs.map((s) => `- ${s.name} [자료 유형: ${s.type}] 도메인: ${s.domains.join(', ')}`).join('\n');
@@ -186,7 +219,7 @@ export async function translateKeywords(keywords, workDir, log) {
   }
 }
 
-const DIRECT = { koreakr, naver, google, gdelt, fedreg, govuk };
+const DIRECT = { koreakr, naver, google, gdelt, fedreg, govuk, rss };
 
 export async function collectRegion(region, inputs, sources, groups, { workDir, log, claudeOk, onProgress = () => {} }) {
   const enabled = new Set(inputs.groups);
