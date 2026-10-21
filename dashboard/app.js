@@ -127,6 +127,12 @@ function setBar(prefix, pct, label, { done = false, err = false, live = false } 
   $(`#${prefix}ProgressLabel`).textContent = label;
 }
 
+// "제외 사유: 키워드 관련성 없음 42 · 조사기간 밖 3" — so a low pass count explains itself
+function reasonLine(label, m) {
+  const e = Object.entries(m || {}).sort((a, b) => b[1] - a[1]);
+  return e.length ? `<div class="meta">${label} 사유: ${e.map(([k, n]) => `${esc(k)} <b>${n}</b>`).join(' · ')}</div>` : '';
+}
+
 function renderStatus(s) {
   const p = s.progress || { overall: s.stage === 'published' ? 100 : 0, label: stageName(s.stage), steps: [] };
   $('#runProgress').hidden = false;
@@ -140,6 +146,7 @@ function renderStatus(s) {
     return `<div class="region"><div class="state state-${x.state}">${CFG.team.regions[r]} · ${stateName(x.state)}${x.state === 'skipped' ? '' : ` <span class="hint" style="display:inline">${pct}%</span>`}</div>
       ${x.state === 'skipped' ? '' : `<div class="bar ${x.state === 'done' ? 'done' : ''} ${x.state === 'running' ? 'live' : ''}"><span style="width:${pct}%"></span></div>`}
       <div class="meta">${esc(who)}${x.state === 'running' && x.phaseText ? ' · ' + esc(x.phaseText) : ''}${c ? ` · 후보 ${c.candidates} → 통과 ${c.verified} · 보류 ${c.pending} · 제외 ${c.rejected}` : ''}${x.error ? ' · ' + esc(x.error) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
+      ${reasonLine('제외', x.reasons?.rejected)}${reasonLine('보류', x.reasons?.pending)}
       ${(x.skipped || []).length ? `<div class="meta">건너뜀: ${x.skipped.map((k) => esc(k.source + ' (' + k.reason + ')')).join(', ')}</div>` : ''}</div>`;
   };
   const handed = Object.values(s.regions).some((x) => x.state === 'handed');
