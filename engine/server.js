@@ -35,7 +35,14 @@ async function api(req, res, url) {
     const id = safeId(p[2]); if (!id || !fs.existsSync(path.join(RUNS, id))) return send(res, 404, { error: '없는 실행' });
     const sub = p[3];
     try {
-      if (!sub && m === 'GET') return send(res, 200, { status: getStatus(id), data: readJson(runFile(id, 'items.json')), report: readJson(runFile(id, 'report.json')), regions: { domestic: readJson(runFile(id, '영역결과_domestic.json')), overseas: readJson(runFile(id, '영역결과_overseas.json')) } });
+      if (!sub && m === 'GET') {
+        const status = getStatus(id);
+        const regions = { domestic: readJson(runFile(id, '영역결과_domestic.json')), overseas: readJson(runFile(id, '영역결과_overseas.json')) };
+        // runs made before reason tallies existed: derive them from the saved region results
+        const tally = (arr = []) => arr.reduce((acc, x) => { const k = String(x.reason || '기타').replace(/\s*[(:].*$/, '').trim(); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
+        for (const r of ['domestic', 'overseas']) if (status.regions[r] && !status.regions[r].reasons && regions[r]) status.regions[r].reasons = { rejected: tally(regions[r].rejected), pending: tally(regions[r].pending) };
+        return send(res, 200, { status, data: readJson(runFile(id, 'items.json')), report: readJson(runFile(id, 'report.json')), regions });
+      }
       if (sub === 'resume' && m === 'POST') { const b = await readBody(req); return send(res, 200, resumeRegion(id, b.region, b.runner)); }
       if (sub === 'cancel-handoff' && m === 'POST') { const b = await readBody(req); return send(res, 200, cancelHandoff(id, b.runner)); }
       if (sub === 'republish' && m === 'POST') { maybePublish(id, true); return send(res, 200, { ok: true }); }

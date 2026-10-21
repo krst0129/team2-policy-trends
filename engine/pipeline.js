@@ -141,7 +141,9 @@ async function runRegion(id, region, runner) {
     const stamp = (x) => ({ ...x, collectedBy: memberName(runner), collectedAt: now() });
     writeJson(path.join(dir(id), `영역결과_${region}.json`), { region, by: memberName(runner), finishedAt: now(), keywordsEn: inputs.keywordsEn, skipped, verified: ver.verified.map(stamp), pending: ver.pending.map(stamp), rejected: ver.rejected.map(stamp) });
     const s2 = getStatus(id);
-    s2.regions[region] = { ...s2.regions[region], state: 'done', pct: 100, phase: 'done', phaseText: '완료', finishedAt: now(), counts: { candidates: candidates.length, verified: ver.verified.length, pending: ver.pending.length, rejected: ver.rejected.length }, skipped };
+    // why items were left out, grouped ("조사기간 밖 (원문 날짜 …)" → "조사기간 밖")
+    const tally = (arr) => arr.reduce((m, x) => { const k = String(x.reason || '기타').replace(/\s*[(:].*$/, '').trim(); m[k] = (m[k] || 0) + 1; return m; }, {});
+    s2.regions[region] = { ...s2.regions[region], state: 'done', pct: 100, phase: 'done', phaseText: '완료', finishedAt: now(), counts: { candidates: candidates.length, verified: ver.verified.length, pending: ver.pending.length, rejected: ver.rejected.length }, reasons: { rejected: tally(ver.rejected), pending: tally(ver.pending) }, skipped };
     saveStatus(s2);
     log(`영역 완료 — 통과 ${ver.verified.length}건`);
   } catch (e) {
