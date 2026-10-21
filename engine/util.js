@@ -86,3 +86,5 @@ export function canonicalUrl(u) {
 export const normText = (s = '') => decodeEntities(s).toLowerCase().replace(/<[^>]+>/g, '').replace(/[\s\p{P}\p{S}]+/gu, '');
 
 export function now() { return new Date().toISOString(); }
+// Count rejected/pending items by reason, dropping the detail after '(' or ':'.
+export const tallyReasons = (arr = []) => arr.reduce((m, x) => { const k = String(x.reason || '기타').replace(/\s*[(:].*$/, '').trim(); m[k] = (m[k] || 0) + 1; return m; }, {});

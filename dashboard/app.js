@@ -147,7 +147,7 @@ function renderStatus(s) {
       ${x.state === 'skipped' ? '' : `<div class="bar ${x.state === 'done' ? 'done' : ''} ${x.state === 'running' ? 'live' : ''}"><span style="width:${pct}%"></span></div>`}
       <div class="meta">${esc(who)}${x.state === 'running' && x.phaseText ? ' · ' + esc(x.phaseText) : ''}${c ? ` · 후보 ${c.candidates} → 통과 ${c.verified} · 보류 ${c.pending} · 제외 ${c.rejected}` : ''}${x.error ? ' · ' + esc(x.error) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
       ${reasonLine('제외', x.reasons?.rejected)}${reasonLine('보류', x.reasons?.pending)}
-      ${(x.skipped || []).length ? `<div class="meta">건너뜀:${x.skipped.map((k) => esc(k.source + ' (' + k.reason + ')')).join(', ')}</div>` : ''}</div>`;
+      ${(x.skipped || []).length ? `<div class="meta">건너뜀: ${x.skipped.map((k) => esc(k.source + ' (' + k.reason + ')')).join(', ')}</div>` : ''}</div>`;
   };
   const handed = Object.values(s.regions).some((x) => x.state === 'handed');
   $('#statusActions').innerHTML = `${handed ? '<button id="issueBtn" class="ghost">넘김 요청 Issue 만들기</button><button id="cancelHandoff" class="ghost">넘기기 취소 → 직접 조사</button>' : ''}${s.stage === 'error' ? '<button id="republish" class="ghost">발간 다시 시도</button>' : ''}`;

@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ROOT, RUNS, readJson, config, loadEnv } from './util.js';
+import { ROOT, RUNS, readJson, config, loadEnv, tallyReasons as tally } from './util.js';
 import { createRun, resumeRegion, cancelHandoff, getStatus, listRuns, startExport, exportStatus, handoffIssueDraft, claudeInfo, maybePublish } from './pipeline.js';
 import { exportCaps } from './export.js';
 
@@ -39,7 +39,6 @@ async function api(req, res, url) {
         const status = getStatus(id);
         const regions = { domestic: readJson(runFile(id, '영역결과_domestic.json')), overseas: readJson(runFile(id, '영역결과_overseas.json')) };
         // runs made before reason tallies existed: derive them from the saved region results
-        const tally = (arr = []) => arr.reduce((acc, x) => { const k = String(x.reason || '기타').replace(/\s*[(:].*$/, '').trim(); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
         for (const r of ['domestic', 'overseas']) if (status.regions[r] && !status.regions[r].reasons && regions[r]) status.regions[r].reasons = { rejected: tally(regions[r].rejected), pending: tally(regions[r].pending) };
         return send(res, 200, { status, data: readJson(runFile(id, 'items.json')), report: readJson(runFile(id, 'report.json')), regions });
       }
