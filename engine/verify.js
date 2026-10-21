@@ -101,7 +101,7 @@ async function checkOne(c, start, end, kws) {
   return { ...rec, state: 'verified', date, dateSource };
 }
 
-export async function verifyAll(cands, start, end, kws, log) {
+export async function verifyAll(cands, start, end, kws, log, onProgress = () => {}) {
   // de-duplicate by canonical URL before fetching
   const seen = new Map();
   for (const c of cands) {
@@ -114,6 +114,7 @@ export async function verifyAll(cands, start, end, kws, log) {
   const results = await pool(list, 6, async (c) => {
     const r = await checkOne(c, start, end, kws);
     if (++done % 20 === 0) log(`링크 검증 ${done}/${list.length}`);
+    onProgress(done / list.length, `링크 검증 ${done}/${list.length}`);
     return r;
   });
   const by = (s) => results.filter((r) => r.state === s);

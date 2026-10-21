@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, RUNS, readJson, config, loadEnv } from './util.js';
-import { createRun, resumeRegion, cancelHandoff, getStatus, listRuns, exportReport, handoffIssueDraft, claudeInfo, maybePublish } from './pipeline.js';
+import { createRun, resumeRegion, cancelHandoff, getStatus, listRuns, startExport, exportStatus, handoffIssueDraft, claudeInfo, maybePublish } from './pipeline.js';
 import { exportCaps } from './export.js';
 
 loadEnv();
@@ -39,7 +39,8 @@ async function api(req, res, url) {
       if (sub === 'resume' && m === 'POST') { const b = await readBody(req); return send(res, 200, resumeRegion(id, b.region, b.runner)); }
       if (sub === 'cancel-handoff' && m === 'POST') { const b = await readBody(req); return send(res, 200, cancelHandoff(id, b.runner)); }
       if (sub === 'republish' && m === 'POST') { maybePublish(id, true); return send(res, 200, { ok: true }); }
-      if (sub === 'export' && m === 'POST') { const b = await readBody(req); const f = await exportReport(id, b.format); return send(res, 200, { file: path.basename(f) }); }
+      if (sub === 'export' && m === 'POST') { const b = await readBody(req); if (!['pdf', 'hwpx', 'web'].includes(b.format)) return send(res, 400, { error: '지원하지 않는 형식' }); return send(res, 200, startExport(id, b.format)); }
+      if (sub === 'export' && m === 'GET') return send(res, 200, exportStatus(id, url.searchParams.get('format')) || { pct: 0, done: false, idle: true });
       if (sub === 'file' && m === 'GET') {
         const name = url.searchParams.get('name');
         if (!UPLOAD_FILES.includes(name) && !/^그림\/[\w-]+\.png$/.test(name)) return send(res, 403, { error: '허용되지 않은 파일' });

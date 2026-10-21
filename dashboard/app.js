@@ -115,14 +115,31 @@ async function openRun(id) {
   for (const [b, k] of [['#expHwpx', 'hwpx'], ['#expPdf', 'pdf'], ['#expWeb', 'web']]) $(b).disabled = !done || (k !== 'web' && !CFG.exportCaps[k]);
   $('#pushBtn').disabled = !done;
   clearTimeout(pollTimer);
-  if (['collecting', 'publishing'].includes(current.stage) || Object.values(current.regions).some((r) => ['queued', 'running'].includes(r.state))) pollTimer = setTimeout(() => openRun(id), 2500);
+  if (['collecting', 'publishing'].includes(current.stage) || Object.values(current.regions).some((r) => ['queued', 'running'].includes(r.state))) pollTimer = setTimeout(() => openRun(id), 1200);
+}
+
+function setBar(prefix, pct, label, { done = false, err = false, live = false } = {}) {
+  const bar = $(`#${prefix}Bar`);
+  $(`#${prefix}BarFill`).style.width = pct + '%';
+  bar.setAttribute('aria-valuenow', pct);
+  bar.classList.toggle('done', done); bar.classList.toggle('err', err); bar.classList.toggle('live', live && !done && !err);
+  $(`#${prefix}ProgressPct`).textContent = pct + '%';
+  $(`#${prefix}ProgressLabel`).textContent = label;
 }
 
 function renderStatus(s) {
+  const p = s.progress || { overall: s.stage === 'published' ? 100 : 0, label: stageName(s.stage), steps: [] };
+  $('#runProgress').hidden = false;
+  const running = ['collecting', 'publishing'].includes(s.stage);
+  setBar('run', p.overall, s.stage === 'published' ? '✓ 발간 완료 (완료 기준 100%)' : p.label, { done: s.stage === 'published', err: s.stage === 'error', live: running });
+  $('#runSteps').innerHTML = (p.steps || []).map((x) => `<li class="${x.state}">${esc(x.label)}</li>`).join('');
   const regionCard = (r) => {
     const x = s.regions[r]; const c = x.counts;
     const who = x.byName || (x.to ? `→ ${member(x.to)?.name}` : '');
-    return `<div class="region"><div class="state state-${x.state}">${CFG.team.regions[r]} · ${stateName(x.state)}</div><div class="meta">${esc(who)}${c ? ` · 후보 ${c.candidates} → 통과 ${c.verified} · 보류 ${c.pending} · 제외 ${c.rejected}` : ''}${x.error ? ' · ' + esc(x.error) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
+    const pct = x.state === 'done' ? 100 : x.pct || 0;
+    return `<div class="region"><div class="state state-${x.state}">${CFG.team.regions[r]} · ${stateName(x.state)}${x.state === 'skipped' ? '' : ` <span class="hint" style="display:inline">${pct}%</span>`}</div>
+      ${x.state === 'skipped' ? '' : `<div class="bar ${x.state === 'done' ? 'done' : ''} ${x.state === 'running' ? 'live' : ''}"><span style="width:${pct}%"></span></div>`}
+      <div class="meta">${esc(who)}${x.state === 'running' && x.phaseText ? ' · ' + esc(x.phaseText) : ''}${c ? ` · 후보 ${c.candidates} → 통과 ${c.verified} · 보류 ${c.pending} · 제외 ${c.rejected}` : ''}${x.error ? ' · ' + esc(x.error) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
       ${(x.skipped || []).length ? `<div class="meta">건너뜀: ${x.skipped.map((k) => esc(k.source + ' (' + k.reason + ')')).join(', ')}</div>` : ''}</div>`;
   };
   const handed = Object.values(s.regions).some((x) => x.state === 'handed');
@@ -137,13 +154,23 @@ function renderStatus(s) {
 
 // ---------- export ----------
 async function exportAs(fmt) {
-  const btn = { pdf: '#expPdf', hwpx: '#expHwpx', web: '#expWeb' }[fmt]; $(btn).disabled = true;
-  $('#expMsg').textContent = `${{ pdf: 'PDF', hwpx: 'hwpx', web: '웹페이지' }[fmt]} 만드는 중…`;
+  const name = { pdf: 'PDF', hwpx: '한글(hwpx)', web: '웹페이지' }[fmt];
+  const btns = ['#expHwpx', '#expPdf', '#expWeb']; btns.forEach((b) => ($(b).disabled = true));
+  const id = current.id;
+  $('#expProgress').hidden = false; $('#expMsg').textContent = '';
+  setBar('exp', 0, `${name} 내보내기 시작`, { live: true });
   try {
-    const r = await api(`runs/${current.id}/export`, { method: 'POST', body: { format: fmt } });
-    $('#expMsg').textContent = `완료: ${r.file}`;
-    location.href = fileUrl(current.id, r.file, true);
-  } catch (e) { $('#expMsg').textContent = '실패: ' + e.message; } finally { $(btn).disabled = false; }
+    let j = await api(`runs/${id}/export`, { method: 'POST', body: { format: fmt } });
+    while (!j.done) {
+      setBar('exp', j.pct, `${name} · ${j.text}`, { live: true });
+      await new Promise((r) => setTimeout(r, 600));
+      j = await api(`runs/${id}/export?format=${fmt}`);
+    }
+    if (j.error) throw new Error(j.error);
+    setBar('exp', 100, `✓ ${name} 완료 (완료 기준 100%) · ${j.file}`, { done: true });
+    location.href = fileUrl(id, j.file, true);
+  } catch (e) { setBar('exp', 100, `${name} 실패`, { err: true }); $('#expMsg').textContent = '실패: ' + e.message; }
+  finally { btns.forEach((b) => ($(b).disabled = false)); }
 }
 $('#expHwpx').onclick = () => exportAs('hwpx');
 $('#expPdf').onclick = () => exportAs('pdf');

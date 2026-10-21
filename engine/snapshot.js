@@ -17,6 +17,15 @@ export function buildSnapshot(runDir, id) {
   const topics = config('topics.json').topics;
   const i = st.inputs;
   const who = Object.values(st.regions).map((r) => r.byName).filter(Boolean);
+  const publishedAt = st.publishedAt || new Date().toISOString();
+  // A안: the exports made at publish time travel inside this page (base64), so it works with no server
+  const embed = (name) => { const f = path.join(runDir, name); return fs.existsSync(f) ? fs.readFileSync(f).toString('base64') : ''; };
+  const files = {
+    hwpx: { name: `${id}_정책조사보고서.hwpx`, type: 'application/hwp+zip', b64: embed('정책조사보고서.hwpx') },
+    pdf: { name: `${id}_정책조사보고서.pdf`, type: 'application/pdf', b64: embed('정책조사보고서.pdf') },
+  };
+  const kb = (b64) => Math.round((b64.length * 3) / 4 / 1024);
+  const fileNote = (k, label) => (files[k].b64 ? `${label} ${kb(files[k].b64).toLocaleString('ko-KR')}KB` : `${label} 없음(발간 때 만들지 못함)`);
   const html = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escHtml(report.title)}</title>
@@ -24,7 +33,7 @@ export function buildSnapshot(runDir, id) {
 <body>
 <header class="topbar"><div class="topbar-in">
   <div class="brand"><h1>과학기술정책 동향 조사 결과</h1><p>${escHtml(report.title)}</p></div>
-  <div class="snapshot-note">키워드 ${escHtml(i.keywords.join(', '))} · ${i.start} ~ ${i.end} · 실행 ${escHtml(id)} · 조사 ${escHtml([...new Set(who)].join('·'))}<br>발간 ${escHtml((st.publishedAt || '').slice(0, 16).replace('T', ' '))} UTC 기준 결과를 담은 웹페이지입니다(서버 없이 열림)</div>
+  <div class="snapshot-note">키워드 ${escHtml(i.keywords.join(', '))} · ${i.start} ~ ${i.end} · 실행 ${escHtml(id)} · 조사 ${escHtml([...new Set(who)].join('·'))}<br>발간 ${escHtml(new Date(publishedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false }))} 기준 결과 · 서버 없이 열리는 내보내기 도구</div>
 </div></header>
 <main>
   <div class="kpis" id="kpis"></div>
@@ -43,9 +52,23 @@ export function buildSnapshot(runDir, id) {
   </div>
   <div class="layout-bottom">
     <section class="card"><div class="card-h"><h2>키워드 분석</h2></div><p class="hint">제목에 함께 자주 나온 단어 — 분류표 밖의 새 흐름을 찾는 참고용</p><div id="clusters" class="clusters" style="margin-top:8px"></div></section>
-    <section class="card"><div class="card-h"><h2>정책조사 보고서</h2></div><p class="report-title">${escHtml(report.title)}</p><div class="report-preview"><iframe id="reportFrame" title="보고서" srcdoc="${escHtml(reportHtml)}"></iframe></div></section>
+    <section class="card"><div class="card-h"><h2>정책조사 보고서</h2></div><p class="report-title">${escHtml(report.title)}</p><div class="report-preview"><iframe id="reportFrame" title="보고서" srcdoc="${escHtml(reportHtml)}"></iframe></div>
+      <h3>정책 보고서 내보내기</h3>
+      <div class="btn-row" style="margin:0">
+        <button class="primary" data-file="hwpx" ${files.hwpx.b64 ? '' : 'disabled'}>hwpx</button>
+        <button class="primary" data-file="pdf" ${files.pdf.b64 ? '' : 'disabled'}>PDF</button>
+        <button class="ghost" id="printBtn">인쇄</button>
+        <button class="cta" id="csvBtn2">CSV</button>
+      </div>
+      <div class="progress small" id="expProgress" hidden>
+        <div class="progress-top"><span id="expProgressLabel"></span><b id="expProgressPct">0%</b></div>
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="expBar"><span id="expBarFill"></span></div>
+      </div>
+      <p class="hint" style="margin-top:8px">이 웹페이지 안에 들어 있는 파일: ${escHtml(fileNote('hwpx', 'hwpx'))} · ${escHtml(fileNote('pdf', 'PDF'))} · CSV는 목록에서 바로 만듦</p>
+    </section>
   </div>
 </main>
+<script type="application/json" id="embedded-files">${safeJson(files)}</script>
 <script>
 const Charts = (() => {
 ${asScript(read('charts.js'))}
@@ -59,14 +82,35 @@ return { mountResults, csvText };
 const DATA = ${safeJson(data)};
 const TOPICS = ${safeJson(topics)};
 const INPUTS = ${safeJson(i)};
-mountResults({ data: DATA, topics: TOPICS, inputs: INPUTS, onCsv: () => {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csvText(DATA.items)], { type: 'text/csv;charset=utf-8' }));
-  a.download = ${safeJson(id + '_조사자료목록.csv')}; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-} });
+const save = (blob, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+const bar = (pct, label, done) => {
+  document.getElementById('expProgress').hidden = false;
+  document.getElementById('expBarFill').style.width = pct + '%';
+  document.getElementById('expBar').setAttribute('aria-valuenow', pct);
+  document.getElementById('expBar').classList.toggle('done', !!done);
+  document.getElementById('expProgressPct').textContent = pct + '%';
+  document.getElementById('expProgressLabel').textContent = label;
+};
+const csv = () => { bar(50, 'CSV 만드는 중'); save(new Blob([csvText(DATA.items)], { type: 'text/csv;charset=utf-8' }), ${safeJson(id + '_조사자료목록.csv')}); bar(100, '✓ CSV 완료 (완료 기준 100%)', true); };
+mountResults({ data: DATA, topics: TOPICS, inputs: INPUTS, onCsv: csv });
+document.getElementById('csvBtn2').onclick = csv;
+const FILES = JSON.parse(document.getElementById('embedded-files').textContent);
+document.querySelectorAll('[data-file]').forEach((b) => (b.onclick = async () => {
+  const f = FILES[b.dataset.file], label = b.dataset.file === 'pdf' ? 'PDF' : '한글(hwpx)';
+  // decode in chunks so the bar moves on large files
+  const bin = atob(f.b64), out = new Uint8Array(bin.length), step = 1 << 18;
+  for (let i = 0; i < bin.length; i += step) {
+    for (let j = i; j < Math.min(bin.length, i + step); j++) out[j] = bin.charCodeAt(j);
+    bar(Math.round(((i + step) / bin.length) * 95), label + ' 꺼내는 중');
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  save(new Blob([out], { type: f.type }), f.name);
+  bar(100, '✓ ' + label + ' 완료 (완료 기준 100%) · ' + f.name, true);
+}));
+document.getElementById('printBtn').onclick = () => { const w = document.getElementById('reportFrame').contentWindow; w.focus(); w.print(); };
 </script>
 </body></html>`;
-  const out = path.join(runDir, '조사결과_대시보드.html');
+  const out = path.join(runDir, `조사결과_대시보드.html`);
   fs.writeFileSync(out, html, 'utf8');
   return out;
 }

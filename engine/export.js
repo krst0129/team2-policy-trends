@@ -17,13 +17,32 @@ function run(bin, args, timeoutMs = 120000) {
     ch.on('error', (e) => { clearTimeout(t); reject(e); });
   });
 }
-const edgeArgs = (profile) => ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`];
+// a fresh profile per launch: a still-closing Edge keeps its profile locked, which makes the next launch exit at once
+const edgeArgs = (base) => ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${base}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`];
 
 export async function toPdf(htmlPath, pdfPath, tmpDir) {
   if (!EDGE) throw new Error('Microsoft Edge 없음');
-  await run(EDGE, [...edgeArgs(path.join(tmpDir, 'edge')), '--no-pdf-header-footer', `--print-to-pdf=${pdfPath}`, pathToFileURL(htmlPath).href]);
-  if (!fs.existsSync(pdfPath)) throw new Error('PDF 생성 실패');
+  fs.rmSync(pdfPath, { force: true });
+  let r;
+  for (let attempt = 1; attempt <= 2 && !fs.existsSync(pdfPath); attempt++) {
+    r = await run(EDGE, [...edgeArgs(path.join(tmpDir, 'edge')), '--no-pdf-header-footer', `--print-to-pdf=${pdfPath}`, pathToFileURL(htmlPath).href]);
+    await waitForFile(pdfPath, 20000);
+  }
+  if (!fs.existsSync(pdfPath)) throw new Error('PDF 생성 실패: ' + (r?.err || '').trim().slice(0, 200));
+  cleanupProfiles(tmpDir);
   return pdfPath;
+}
+// Edge's launcher can exit before the real browser process finishes writing the file
+async function waitForFile(f, ms) {
+  const t0 = Date.now(); let last = -1;
+  while (Date.now() - t0 < ms) {
+    if (fs.existsSync(f)) { const n = fs.statSync(f).size; if (n > 0 && n === last) return true; last = n; }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return fs.existsSync(f);
+}
+function cleanupProfiles(tmpDir) {
+  try { for (const d of fs.readdirSync(tmpDir)) if (d.startsWith('edge-')) fs.rmSync(path.join(tmpDir, d), { recursive: true, force: true }); } catch { /* still in use: next run */ }
 }
 
 /** svgs: {id: svgString}. Returns {id: {src, w}} for <img> use. */
@@ -35,10 +54,13 @@ export async function chartsToPng(svgs, dir, tmpDir) {
     const w = +(svg.match(/width="(\d+)"/)?.[1] || 620), h = +(svg.match(/height="(\d+)"/)?.[1] || 300);
     const html = path.join(dir, `${id}.html`), png = path.join(dir, `${id}.png`);
     fs.writeFileSync(html, `<!doctype html><meta charset="utf-8"><body style="margin:0;background:#fff">${svg}</body>`, 'utf8');
+    fs.rmSync(png, { force: true });
     await run(EDGE, [...edgeArgs(path.join(tmpDir, 'edge')), '--hide-scrollbars', '--force-device-scale-factor=2', `--window-size=${w},${h}`, `--screenshot=${png}`, pathToFileURL(html).href]);
+    await waitForFile(png, 15000);
     fs.rmSync(html, { force: true });
     if (fs.existsSync(png)) out[id] = { src: pathToFileURL(png).href, file: png, w, h };
   }
+  cleanupProfiles(tmpDir);
   return out;
 }
 

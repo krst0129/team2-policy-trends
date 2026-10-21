@@ -18,7 +18,9 @@ async function koreakr({ keywords, start, end }, src, log) {
       for (const m of items) {
         const block = m[3];
         const title = stripTags(block.match(/<strong>([\s\S]*?)<\/strong>/)?.[1] || '');
-        const src2 = [...(block.match(/<span class="source">([\s\S]*?)<\/span>\s*<\/span>/)?.[1] || '').matchAll(/<span>([\s\S]*?)<\/span>/g)].map((x) => stripTags(x[1]));
+        // <span class="source"><span>2026-10-12</span><span>중소벤처기업부</span></span>
+        const sm = block.match(/<span class="source">\s*<span>([\s\S]*?)<\/span>\s*<span>([\s\S]*?)<\/span>/);
+        const src2 = sm ? [stripTags(sm[1]), stripTags(sm[2])] : [];
         const date = parseLooseDate(src2[0] || '');
         if (!title || !inRange(date, start, end)) continue;
         out.push({ title, url: `https://www.korea.kr/briefing/pressReleaseView.do?newsId=${m[2]}`, date, org: src2[1] || '정책브리핑', type: '보도자료', snippet: stripTags(block.match(/<span class="lead">([\s\S]*?)<\/span>\s*<span class="source">/)?.[1] || '').slice(0, 300), keyword: kw });
@@ -186,28 +188,38 @@ export async function translateKeywords(keywords, workDir, log) {
 
 const DIRECT = { koreakr, naver, google, gdelt, fedreg, govuk };
 
-export async function collectRegion(region, inputs, sources, groups, { workDir, log, claudeOk }) {
+export async function collectRegion(region, inputs, sources, groups, { workDir, log, claudeOk, onProgress = () => {} }) {
   const enabled = new Set(inputs.groups);
   const groupRegion = Object.fromEntries(groups.map((g) => [g.id, g.region]));
   const srcs = sources.filter((s) => groupRegion[s.group] === region && enabled.has(s.group));
   const results = [], skipped = [];
-  for (const s of srcs.filter((x) => x.method !== 'claude')) {
+  const direct = srcs.filter((x) => x.method !== 'claude');
+  const viaClaude = srcs.filter((x) => x.method === 'claude');
+  // progress units: each direct source = 1, Claude research = 4 (it takes longest)
+  const total = direct.length + (viaClaude.length && claudeOk ? 4 : 0) || 1;
+  let done = 0;
+  for (const s of direct) {
+    onProgress(done / total, `${s.name} 수집 중`);
     try {
       const r = await DIRECT[s.method](inputs, s, log);
       if (r && r.skipped) { skipped.push({ source: s.name, reason: r.skipped }); continue; }
       results.push(...r.map((c) => ({ ...c, sourceId: s.id, via: c.via || s.method })));
     } catch (e) { log(`${s.name} 수집 오류: ${e.message}`); skipped.push({ source: s.name, reason: '수집 오류: ' + e.message }); }
+    finally { done++; }
   }
-  const viaClaude = srcs.filter((x) => x.method === 'claude');
   if (viaClaude.length) {
     if (!claudeOk) { skipped.push(...viaClaude.map((s) => ({ source: s.name, reason: 'Claude Code 사용 불가(로그인 필요)' }))); log('Claude Code 사용 불가 — 해당 출처 건너뜀'); }
     else {
+      // Claude research has no intermediate signal: estimate from elapsed time (≈6 min), capped below its share
+      const t0 = Date.now();
+      const tick = setInterval(() => onProgress((done + 4 * Math.min(0.92, (Date.now() - t0) / 360000)) / total, 'Claude Code가 국책연구기관·정부 누리집 조사 중'), 2000);
       try {
-        const r = await claudeResearch(inputs, viaClaude, region, workDir, log);
+        const r = await claudeResearch(inputs, viaClaude, region, workDir, log).finally(() => clearInterval(tick));
         const byDomain = (u) => viaClaude.find((s) => s.domains.some((d) => host(u).endsWith(d)))?.id || viaClaude[0].id;
         results.push(...r.map((c) => ({ ...c, sourceId: byDomain(c.url) })));
       } catch (e) { log('Claude Code 조사 오류: ' + e.message); skipped.push({ source: 'Claude Code 조사', reason: e.message }); }
     }
   }
+  onProgress(1, '수집 완료');
   return { candidates: results.map((c) => ({ ...c, region })), skipped };
 }

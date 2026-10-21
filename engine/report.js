@@ -1,10 +1,14 @@
-// Report builder. Every sentence must cite verified item numbers; sentences whose
-// numbers or quotes are not found in the cited items are dropped (거짓 방지 규칙 5).
+// Policy report in the v1 weekly-report format:
+// 표지 → 이번 주 핵심 → Ⅰ. 요약(주요 동향·수집 현황·그림) → Ⅱ. 주제별 주요 동향 → Ⅲ. 시사점 → 붙임 → ※ 확인 필요
+// Every sentence cites verified item numbers; sentences whose numbers or quotes are
+// not found in the cited items are dropped (거짓 방지 규칙 5). 출처 lines are built
+// from the cited items themselves, never from model text.
 import { runClaude, extractJson } from './claude.js';
 import { escHtml } from './util.js';
-import { hbar, columns, stack100, heatTable, topicCounts, monthly, SOURCE_KIND, LIGHT } from '../dashboard/charts.js';
+import { hbar, line, stack100, heatTable, topicCounts, monthly, weekly, SOURCE_KIND, LIGHT } from '../dashboard/charts.js';
 
 const fmtD = (d) => { const [y, m, dd] = d.split('-'); return `${y}. ${+m}. ${+dd}.`; };
+const shortD = (d) => `${d.slice(0, 4)}.${+d.slice(5, 7)}.${+d.slice(8)}`;
 const ym = (d) => `${d.slice(0, 4)}.${+d.slice(5, 7)}`;
 
 export function reportTitle(inputs, items, topics) {
@@ -13,158 +17,219 @@ export function reportTitle(inputs, items, topics) {
   return `「${kw}」 정책동향 보고서${top.length ? `: ${top.join('·')} 중심` : ''} (${ym(inputs.start)}~${ym(inputs.end)})`;
 }
 
+// ---------- validation ----------
 const digits = (s) => (s.match(/\d[\d,]*(?:\.\d+)?/g) || []).map((x) => x.replace(/,/g, ''));
-function validateSentence(sent, byNo) {
-  const refs = (sent.refs || []).map(Number).filter((n) => byNo.has(n));
-  if (!sent.text || !refs.length) return { ok: false, why: '근거 번호 없음' };
+function checkText(text, refs, byNo) {
+  refs = (refs || []).map(Number).filter((n) => byNo.has(n));
+  if (!text || !refs.length) return { ok: false, why: '근거 번호 없음' };
   const src = refs.map((n) => { const it = byNo.get(n); return `${it.title} ${it.snippet || ''} ${it.date} ${it.org}`; }).join(' ');
   const srcDigits = new Set(digits(src));
-  const missing = digits(sent.text).filter((d) => d.length >= 2 && !srcDigits.has(d) && !/^(19|20)\d\d$/.test(d));
+  const missing = digits(text).filter((d) => d.length >= 2 && !srcDigits.has(d) && !/^(19|20)\d\d$/.test(d));
   if (missing.length) return { ok: false, why: `근거에 없는 수치 ${missing.join(', ')}` };
-  for (const q of sent.text.match(/[“"「『]([^”"」』]{4,})[”"」』]/g) || []) {
+  for (const q of text.match(/[“"「『]([^”"」』]{4,})[”"」』]/g) || []) {
     const inner = q.slice(1, -1).replace(/\s/g, '');
     if (!src.replace(/\s/g, '').includes(inner)) return { ok: false, why: `근거에 없는 인용 ${q}` };
   }
-  return { ok: true, text: sent.text, refs };
+  return { ok: true, text, refs };
 }
 
-async function writeWithClaude(inputs, items, topics, workDir, log) {
-  const list = items.map((it) => `[${it.no}] (${it.date}, ${it.org}, ${it.region === 'domestic' ? '국내' : '해외'}, 주제:${it.topicId}) ${it.title} — ${(it.snippet || '').slice(0, 160)}`).join('\n');
-  const prompt = `아래는 링크 검증을 통과한 정책 자료 목록입니다. 이 목록만 근거로 정책동향 보고서 문안을 쓰세요.
+// ---------- charts (shared by HTML/PDF and hwpx PNGs) ----------
+export function reportCharts(items, inputs, topics) {
+  const kinds = ['정부·공공기관', '연구기관·보고서', '언론'].map((k) => ({ label: k, value: items.filter((i) => SOURCE_KIND(i.type) === k).length }));
+  const regions = [{ label: '국내', value: items.filter((i) => i.region === 'domestic').length }, { label: '해외', value: items.filter((i) => i.region === 'overseas').length }];
+  const orgMap = new Map(); for (const i of items) orgMap.set(i.org, (orgMap.get(i.org) || 0) + 1);
+  const orgs = [...orgMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => ({ key: k, label: k.length > 18 ? k.slice(0, 17) + '…' : k, value: v }));
+  return {
+    topics: hbar(topicCounts(items, topics).filter((c) => c.value), { theme: LIGHT, width: 600, labelW: 140 }),
+    weekly: line(weekly(items, inputs.start, inputs.end), { theme: LIGHT, width: 600, height: 220 }),
+    kinds: stack100(kinds, { theme: LIGHT, width: 600 }),
+    regions: stack100(regions, { theme: LIGHT, width: 600 }),
+    orgs: hbar(orgs, { theme: LIGHT, width: 600, labelW: 190, rowH: 26 }),
+  };
+}
+
+// ---------- text ----------
+async function writeWithClaude(inputs, items, topics, workDir) {
+  const list = items.map((it) => `[${it.no}] (${it.date}, ${it.org}, ${it.region === 'domestic' ? '국내' : '해외'}, ${it.type}, 주제:${it.topicId}) ${it.title} — ${(it.snippet || '').slice(0, 160)}`).join('\n');
+  const prompt = `아래는 링크 검증을 통과한 정책 자료 목록입니다. 이 목록만 근거로, 국책연구기관(STEPI·KISTEP) 정책동향 보고서 문체의 문안을 쓰세요.
 [키워드] ${inputs.keywords.join(', ')}  [기간] ${inputs.start} ~ ${inputs.end}
 [주제] ${topics.map((t) => `${t.id}=${t.name}`).join(', ')}
 
 [규칙]
-- 목록에 없는 사실, 수치, 기관, 인용은 절대 쓰지 마세요. 수치는 목록에 적힌 숫자 그대로만 쓰세요.
-- 모든 문장에 근거 자료 번호(refs)를 다세요.
-- 개조식 공문서 문체(~함, ~임)로, 한 문장은 2줄 이내.
-- 문장 수: summary 3~5, 주제마다 1~3(자료가 있는 주제만), implications 3~4.
+- 목록에 없는 사실·수치·기관·인용은 절대 쓰지 마세요. 수치는 목록에 적힌 숫자 그대로만.
+- 모든 문장에 근거 자료 번호(refs)를 다세요. 출처 표기는 쓰지 마세요(자동으로 붙습니다).
+- 개조식 공문서 문체(~함, ~임, ~추진), 한 문장 2줄 이내. 「」로 정책·문서명을 감싸세요.
+- 문장 안에 큰따옴표(")를 절대 쓰지 마세요. 인용은 ‘ ’ 또는 「 」를 쓰세요. 출력은 반드시 올바른 JSON이어야 합니다.
+- highlights: 이번 기간 가장 중요한 흐름 3개.
+- summary: (분야) 꼬리표가 붙은 주요 동향 4~6개. label 예: 정부 전략, 법·제도, 예산·사업, 통계·분석, 산업·기술, 해외.
+- topics: 자료가 있는 주제마다 headline(□ 한 줄 핵심 메시지)과 points 1~3개, 각 point에 subs(세부) 0~2개.
+- implications: 3~4개, keyword(2~5자 꼬리표)와 title(한 줄)과 points 1~2개.
 
 [자료 목록]
 ${list}
 
 JSON으로만 답하세요:
-{"summary":[{"text":"...","refs":[1,2]}],"topics":{"주제id":[{"text":"...","refs":[3]}]},"implications":[{"text":"...","refs":[4,5]}]}`;
-  const res = await runClaude(prompt, { maxTurns: 3, workDir, timeoutMs: 6 * 60 * 1000 });
-  return extractJson(res.text);
+{"highlights":[{"text":"","refs":[1]}],
+ "summary":[{"label":"정부 전략","text":"","refs":[1,2]}],
+ "topics":{"주제id":{"headline":"","refs":[1],"points":[{"text":"","refs":[1],"subs":[{"text":"","refs":[1]}]}]}},
+ "implications":[{"keyword":"","title":"","refs":[1],"points":[{"text":"","refs":[1]}]}]}`;
+  let lastErr;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const p = attempt === 1 ? prompt : prompt + `\n\n[주의] 직전 답변이 JSON 형식 오류(${lastErr})로 읽히지 않았습니다. 문장 안 큰따옴표를 없애고, 올바른 JSON만 다시 출력하세요.`;
+    const res = await runClaude(p, { maxTurns: 3, workDir, timeoutMs: 8 * 60 * 1000 });
+    try { return extractJson(res.text); } catch (e) { lastErr = e.message; }
+  }
+  throw new Error('JSON 형식 오류: ' + lastErr);
 }
 
 export async function buildReportData(inputs, items, topics, { claudeOk, workDir, log }) {
   const byNo = new Map(items.map((it) => [it.no, it]));
   const counts = topicCounts(items, topics);
   const dropped = [];
-  let text = null;
+  // bullets (□ ○ ◇ - ·) are added by the renderer; strip any the model already wrote
+  const clean = (t) => (t == null ? t : String(t).replace(/^[\s□■○●◇◆\-–·*※]+/, '').trim());
+  const ok = (t, refs) => { t = clean(t); const v = checkText(t, refs, byNo); if (!v.ok && t) dropped.push({ text: t, why: v.why }); return v.ok ? v : null; };
+  let raw = null;
   if (claudeOk && items.length) {
-    try { text = await writeWithClaude(inputs, items, topics, workDir, log); } catch (e) { log('보고서 문안 작성 실패, 기본 문안 사용: ' + e.message); }
+    try { raw = await writeWithClaude(inputs, items, topics, workDir); } catch (e) { log('보고서 문안 작성 실패, 기본 문안 사용: ' + e.message); }
   }
-  const check = (arr = []) => arr.map((s) => { const v = validateSentence(s, byNo); if (!v.ok) dropped.push({ text: s.text, why: v.why }); return v; }).filter((v) => v.ok);
-  const summary = text ? check(text.summary) : [];
-  const implications = text ? check(text.implications) : [];
+  const byTopic = Object.fromEntries(topics.map((t) => [t.id, items.filter((i) => i.topicId === t.id).sort((a, b) => b.date.localeCompare(a.date))]));
+  const itemLine = (it) => ({ text: `${it.org}(${shortD(it.date)}) ${it.title}`, refs: [it.no], subs: [] });
+
+  const highlights = (raw?.highlights || []).map((h) => ok(h.text, h.refs)).filter(Boolean);
+  // the model sometimes repeats a "(분야)" tag at the start of the text — keep only the label field
+  const stripTag = (t = '') => String(t).replace(/^(\s*\([^)]{1,14}\)\s*)+/, '');
+  const summary = (raw?.summary || []).map((s) => { const v = ok(stripTag(s.text), s.refs); return v && { ...v, label: String(s.label || '').replace(/[()]/g, '').slice(0, 10) }; }).filter(Boolean);
   const topicText = {};
-  for (const t of topics) topicText[t.id] = text ? check(text.topics?.[t.id]) : [];
-  if (dropped.length) log(`보고서 문장 ${dropped.length}개를 근거 불일치로 뺐음`);
-  // fallback summary from our own counts (no external claims)
+  for (const c of counts.filter((x) => x.value)) {
+    const r = raw?.topics?.[c.key];
+    const points = (r?.points || []).map((p) => { const v = ok(p.text, p.refs); if (!v) return null; return { ...v, subs: (p.subs || []).map((s) => ok(s.text, s.refs)).filter(Boolean) }; }).filter(Boolean);
+    const allRefs = [...new Set([...(r?.refs || []), ...points.flatMap((p) => [...p.refs, ...p.subs.flatMap((s) => s.refs)])])];
+    const head = r?.headline ? ok(r.headline, allRefs) : null;
+    topicText[c.key] = {
+      headline: head?.text || `${c.label} 관련 자료 ${c.value}건이 수집됨`,
+      points: points.length ? points : byTopic[c.key].slice(0, 4).map(itemLine),
+      generated: !!points.length,
+    };
+  }
+  const implications = (raw?.implications || []).map((m) => {
+    const points = (m.points || []).map((p) => ok(p.text, p.refs)).filter(Boolean);
+    if (!points.length) return null;
+    const t = ok(m.title, [...new Set([...(m.refs || []), ...points.flatMap((p) => p.refs)])]);
+    return t && { keyword: String(m.keyword || '').slice(0, 8), title: t.text, points };
+  }).filter(Boolean);
+
+  // fallbacks built only from our own counts and item titles
+  if (!highlights.length) {
+    const top = counts.filter((c) => c.value && c.key !== 'etc').slice(0, 3).map((c) => `${c.label} ${c.value}건`).join(', ');
+    highlights.push({ text: `조사기간 중 링크 검증을 통과한 자료는 총 ${items.length}건이며, 주제별로는 ${top || '기타'} 순으로 많음`, refs: [] });
+  }
   if (!summary.length) {
-    const top = counts.filter((c) => c.value).slice(0, 3).map((c) => `${c.label} ${c.value}건`).join(', ');
-    summary.push({ text: `조사기간 중 검증을 통과한 자료는 총 ${items.length}건이며, 주제별로는 ${top} 순으로 많음`, refs: [], own: true });
+    for (const c of counts.filter((x) => x.value && x.key !== 'etc').slice(0, 5)) {
+      const it = byTopic[c.key][0];
+      summary.push({ label: c.label.split('·')[0], text: `${c.value}건 수집. 최근 자료는 ${it.org}(${shortD(it.date)}) 「${it.title}」`, refs: [it.no] });
+    }
   }
-  return { title: reportTitle(inputs, items, topics), counts, summary, implications, topicText, dropped, generatedBy: text ? 'claude' : 'template' };
+  if (dropped.length) log(`보고서 문장 ${dropped.length}개를 근거 불일치로 뺐음`);
+  return { title: reportTitle(inputs, items, topics), counts, highlights, summary, topicText, implications, dropped, generatedBy: raw ? 'claude' : 'template' };
 }
 
-/** Render the report as HTML. `chartImg` (optional) maps chart id → image path for hwpx (no inline SVG there). */
-// Hangul's HTML import ignores flex/@page and hangs on external hyperlinks, so the
-// hwpx variant uses plain block styles and no <a> links (links stay in CSV/PDF).
-const HWP_CSS = `body, p, td, th, h1, h2, h3 { font-family: '맑은 고딕'; } body { font-size: 10pt; line-height: 160%; } .cap { font-size: 9pt; color: #52514e; text-align: left; }
-.cover { text-align: center; } .kicker { color: #52514e; font-size: 10pt; } h1 { font-size: 18pt; color: #1F3864; } .meta { font-size: 9pt; color: #52514e; }
-h2 { font-size: 14pt; color: #1F3864; } h3 { font-size: 11.5pt; } .cnt { color: #52514e; font-size: 10pt; }
-.b1 { margin-left: 8pt; } .b2 { margin-left: 22pt; font-size: 9.5pt; } .lbl { margin-left: 8pt; font-weight: bold; font-size: 9.5pt; color: #52514e; }
-.ref { color: #2a78d6; font-size: 8.5pt; } .muted { color: #898781; } figcaption { font-size: 9pt; color: #52514e; }
-table { border-collapse: collapse; } td, th { border: 1px solid #c3c2b7; padding: 3pt; font-size: 9pt; } th { background: #EEF3FA; } .note { font-size: 8.5pt; color: #52514e; }`;
+// ---------- render (inline styles so the same HTML works in Edge PDF and Hangul) ----------
+const S = {
+  t1: "font-family:'맑은 고딕'; font-size:20pt; font-weight:bold; text-align:center; color:#1F3864; margin:0 0 6pt 0; line-height:140%;",
+  t2: "font-family:'맑은 고딕'; font-size:12pt; text-align:center; margin:0 0 4pt 0;",
+  meta: "font-family:'맑은 고딕'; font-size:9pt; text-align:center; color:#555555; margin:0 0 2pt 0;",
+  boxh: "font-family:'맑은 고딕'; font-size:11pt; font-weight:bold; color:#1F3864; margin:2pt 0 4pt 0;",
+  h1: "font-family:'맑은 고딕'; font-size:15pt; font-weight:bold; color:#1F3864; margin:16pt 0 6pt 0; border-bottom:2px solid #1F3864;",
+  h2: "font-family:'맑은 고딕'; font-size:13pt; font-weight:bold; color:#1F3864; margin:12pt 0 4pt 0;",
+  h3: "font-family:'맑은 고딕'; font-size:11pt; font-weight:bold; margin:8pt 0 3pt 0;",
+  b1: "font-family:'함초롬바탕','Batang',serif; font-size:10.5pt; line-height:160%; margin:2pt 0 2pt 12pt;",
+  b2: "font-family:'함초롬바탕','Batang',serif; font-size:10pt; line-height:150%; margin:1pt 0 1pt 26pt;",
+  src: "font-family:'맑은 고딕'; font-size:8.5pt; color:#666666; margin:1pt 0 4pt 26pt;",
+  cap: "font-family:'맑은 고딕'; font-size:9pt; color:#444444; margin:2pt 0 8pt 0; text-align:left;",
+  ref: "color:#2a78d6; font-size:8.5pt;",
+};
+const P = (cls, html) => `<p style="${S[cls]}">${html}</p>`;
+const TBL = 'width:150mm; border-collapse:collapse; margin:4pt 0 6pt 0;';
+const TH = "border:1px solid #8EA9DB; background:#D9E2F3; font-family:'맑은 고딕'; font-size:9.5pt; font-weight:bold; padding:3pt; text-align:center;";
+const TD = "border:1px solid #8EA9DB; font-family:'맑은 고딕'; font-size:9pt; padding:3pt;";
+const table = (head, rows, widths = []) => `<table style="${TBL}" width="600" cellpadding="3"><tr>${head.map((h, i) => `<th style="${TH}${widths[i] ? ` width:${widths[i]}mm;` : ''}">${h}</th>`).join('')}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td style="${TD}">${c}</td>`).join('')}</tr>`).join('')}</table>`;
 
-export function renderReportHtml({ inputs, items, topics, data, verifyStats, runId }, { chartImg = null, hwp = false } = {}) {
-  const T = LIGHT;
-  const byTopic = Object.fromEntries(topics.map((t) => [t.id, items.filter((i) => i.topicId === t.id)]));
-  const kinds = ['정부·공공기관', '연구기관·보고서', '언론'].map((k) => ({ label: k, value: items.filter((i) => SOURCE_KIND(i.type) === k).length }));
-  const regions = [{ label: '국내', value: items.filter((i) => i.region === 'domestic').length }, { label: '해외', value: items.filter((i) => i.region === 'overseas').length }];
-  const orgMap = new Map(); for (const i of items) orgMap.set(i.org, (orgMap.get(i.org) || 0) + 1);
-  const orgs = [...orgMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => ({ key: k, label: k.length > 16 ? k.slice(0, 15) + '…' : k, value: v }));
-  const months = monthly(items, inputs.start, inputs.end);
-  const tRows = data.counts.filter((c) => c.value);
-  const heat = heatTable(tRows.map((r) => r.label), months.map((m) => m.label), tRows.map((r) => months.map((m) => items.filter((i) => i.topicId === r.key && i.date.startsWith(m.key)).length)), { theme: T });
-
-  const fig = (id, svg, caption) => `<figure class="fig">${chartImg?.[id] ? `<img src="${chartImg[id].file}" width="${chartImg[id].w}" alt="${escHtml(caption)}">` : svg}<figcaption>${escHtml(caption)}</figcaption></figure>`;
-  const charts = {
-    topics: hbar(data.counts.filter((c) => c.value), { theme: T, width: 620 }),
-    months: columns(months, { theme: T, width: 620, height: 200 }),
-    kinds: stack100(kinds, { theme: T, width: 620 }),
-    regions: stack100(regions, { theme: T, width: 620 }),
-    orgs: hbar(orgs, { theme: T, width: 620, labelW: 170, rowH: 26 }),
+export function renderReportHtml({ inputs, items, topics, data, verifyStats, runId, team }, { chartImg = null, hwp = false } = {}) {
+  const byNo = new Map(items.map((it) => [it.no, it]));
+  const ref = (refs) => (refs?.length ? ` <span style="${S.ref}">[${refs.join(', ')}]</span>` : '');
+  const srcLine = (refs) => {
+    const seen = new Set(), parts = [];
+    for (const n of refs || []) { const it = byNo.get(n); if (!it) continue; const k = it.org + it.date; if (seen.has(k)) continue; seen.add(k); parts.push(`${escHtml(it.org)}(${shortD(it.date)})`); }
+    return parts.length ? P('src', `* 출처: ${parts.slice(0, 4).join(', ')}${parts.length > 4 ? ` 외 ${parts.length - 4}건` : ''}`) : '';
   };
-  const ref = (refs) => (refs?.length ? ` <span class="ref">[${refs.join(', ')}]</span>` : '');
-  const bullets = (arr) => arr.map((s) => `<p class="b1">○ ${escHtml(s.text)}${ref(s.refs)}</p>`).join('');
+  const PB = hwp ? '<p style="margin:0">@@PB@@</p>' : '<div style="page-break-before:always"></div>';
+  const charts = reportCharts(items, inputs, topics);
+  const fig = (id, caption) => `<div style="margin:4pt 0 0 0">${chartImg?.[id] ? `<img src="${chartImg[id].file}" width="${chartImg[id].w}" alt="${escHtml(caption)}">` : charts[id]}</div>${P('cap', escHtml(caption))}`;
+  const who = [...new Set(items.map((i) => i.collectedBy).filter(Boolean))].join('·') || (team || []).join('·');
+  const dom = items.filter((i) => i.region === 'domestic').length;
 
-  let topicSecs = '';
+  let h = '';
+  // cover
+  h += P('t1', escHtml(data.title));
+  h += P('t2', `과학기술정책 동향 조사 보고서 (작성일 ${fmtD(new Date().toISOString().slice(0, 10))})`);
+  h += P('meta', `조사기간: ${fmtD(inputs.start)} ~ ${fmtD(inputs.end)} │ 키워드: ${escHtml(inputs.keywords.join(', '))} │ 수집 자료: ${items.length}건(국내 ${dom} · 해외 ${items.length - dom})`);
+  h += P('meta', `작성: 신흥기술영향평가 2인1조 (${escHtml(who)}) │ 실행 ${escHtml(runId)}`);
+  // highlights box
+  h += `<table style="width:150mm; border:1px solid #1F3864; background:#EEF3FA; border-collapse:collapse; margin:10pt 0 4pt 0;" width="600" cellpadding="8"><tr><td style="border:1px solid #1F3864; background:#EEF3FA; padding:6pt;">${P('boxh', '이번 기간 핵심')}${data.highlights.map((s) => P('b1', `◇ ${escHtml(s.text)}${ref(s.refs)}`)).join('')}</td></tr></table>`;
+
+  // Ⅰ. 요약
+  h += P('h1', 'Ⅰ. 요약');
+  h += P('h3', '□ 주요 동향');
+  h += data.summary.map((s) => P('b1', `○ ${s.label ? `(${escHtml(s.label)}) ` : ''}${escHtml(s.text)}${ref(s.refs)}`)).join('');
+  h += P('h3', '□ 수집 현황');
+  const tc = data.counts.filter((c) => c.value);
+  h += table(['구분', '주제', '국내', '해외', '계'], [...tc.map((c, i) => { const xs = items.filter((x) => x.topicId === c.key); const d = xs.filter((x) => x.region === 'domestic').length; return [i + 1, escHtml(c.label), d, xs.length - d, `<b>${xs.length}</b>`]; }), ['', '<b>합계</b>', dom, items.length - dom, `<b>${items.length}</b>`]], [14, 70, 22, 22, 22]);
+  h += fig('topics', '[그림 1] 주제별 자료 수');
+  h += fig('weekly', '[그림 2] 주별 자료 수 추이');
+  h += fig('kinds', '[그림 3] 출처 유형별 비중');
+  h += fig('regions', '[그림 4] 국내·해외 비중');
+  const months = monthly(items, inputs.start, inputs.end);
+  h += `<div>${heatTable(tc.map((r) => r.label), months.map((m) => m.label), tc.map((r) => months.map((m) => items.filter((i) => i.topicId === r.key && i.date.startsWith(m.key)).length)), { theme: LIGHT }).replace('width:100%', 'width:150mm')}</div>${P('cap', '[표 1] 주제 × 월별 자료 수')}`;
+
+  // Ⅱ. 주제별 주요 동향
+  h += PB + P('h1', 'Ⅱ. 주제별 주요 동향');
   let n = 1;
-  for (const c of data.counts.filter((x) => x.value)) {
-    const list = byTopic[c.key].slice().sort((a, b) => b.date.localeCompare(a.date));
-    topicSecs += `<h3>${n++}. ${escHtml(c.label)} <span class="cnt">(${c.value}건)</span></h3>`;
-    topicSecs += bullets(data.topicText[c.key] || []);
-    topicSecs += `<p class="lbl">주요 자료</p>` + list.slice(0, 6).map((it) => `<p class="b2">- ${escHtml(it.org)}(${fmtD(it.date)}) ${escHtml(it.title)} <span class="ref">[${it.no}]</span></p>`).join('');
-    if (list.length > 6) topicSecs += `<p class="b2 muted">외 ${list.length - 6}건은 붙임 목록 참조</p>`;
+  for (const c of tc) {
+    const t = data.topicText[c.key];
+    h += P('h2', `${n++}. ${escHtml(c.label)} <span style="font-size:10pt; font-weight:normal; color:#555555">(${c.value}건)</span>`);
+    h += P('h3', `□ ${escHtml(t.headline)}`);
+    for (const p of t.points) {
+      h += P('b1', `○ ${escHtml(p.text)}${ref(p.refs)}`);
+      for (const s of p.subs || []) h += P('b2', `- ${escHtml(s.text)}${ref(s.refs)}`);
+      h += srcLine([...p.refs, ...(p.subs || []).flatMap((s) => s.refs)]);
+    }
+    const rest = c.value - t.points.length;
+    if (!t.generated && rest > 0) h += P('src', `※ 외 ${rest}건은 붙임 목록 참조`);
   }
 
-  const listRows = items.map((it) => `<tr><td class="c">${it.no}</td><td class="c nw">${it.date}</td><td>${escHtml(it.topic)}</td><td>${hwp ? escHtml(it.title) : `<a href="${escHtml(it.url)}">${escHtml(it.title)}</a>`}</td><td>${escHtml(it.org)}</td><td class="c">${it.region === 'domestic' ? '국내' : '해외'}</td></tr>`).join('');
-  const kpiCells = [[items.length, '검증 통과 자료'], [`${regions[0].value} / ${regions[1].value}`, '국내 / 해외'], [tRows.length, '주제 수'], [verifyStats.pending, '검증 보류(목록 제외)']];
-  const kpis = `<table class="kpis" style="width:100%"><tr>${kpiCells.map(([v, l]) => `<td class="kpi" style="text-align:center"><b style="font-size:16pt;color:#1F3864">${v}</b><br><span>${l}</span></td>`).join('')}</tr></table>`;
-  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escHtml(data.title)}</title><style>
-@page { size: A4; margin: 18mm 17mm 18mm 17mm; }
-body { font-family: 'Malgun Gothic', system-ui, sans-serif; color: ${T.ink}; font-size: 10.5pt; line-height: 1.6; margin: 0; background: #fff; }
-.page { max-width: 176mm; margin: 0 auto; }
-.cover { text-align: center; padding: 18mm 0 8mm; border-bottom: 3px solid #1F3864; margin-bottom: 8mm; }
-.cover .kicker { color: ${T.ink2}; font-size: 10pt; letter-spacing: .1em; }
-.cover h1 { font-size: 20pt; color: #1F3864; margin: 6mm 0 4mm; line-height: 1.35; }
-.cover .meta { color: ${T.ink2}; font-size: 9.5pt; }
-.kpis { border-collapse: separate; border-spacing: 3mm 0; margin: 6mm -3mm; }
-.kpi { border: 1px solid ${T.grid}; border-radius: 6px; padding: 3mm 4mm; }
-.kpi span { color: ${T.ink2}; font-size: 9pt; }
-.box { border: 1px solid #1F3864; background: #EEF3FA; padding: 4mm 5mm; border-radius: 4px; }
-.box h2 { margin: 0 0 2mm; font-size: 11.5pt; color: #1F3864; border: 0; }
-h2 { font-size: 14pt; color: #1F3864; border-bottom: 2px solid #1F3864; padding-bottom: 1mm; margin: 9mm 0 3mm; }
-h3 { font-size: 11.5pt; margin: 6mm 0 2mm; } .cnt { color: ${T.ink2}; font-weight: 400; font-size: 10pt; }
-.b1 { margin: 1mm 0 1mm 3mm; } .b2 { margin: .5mm 0 .5mm 8mm; font-size: 9.5pt; } .lbl { margin: 2mm 0 0 3mm; font-weight: 700; font-size: 9.5pt; color: ${T.ink2}; }
-.ref { color: #2a78d6; font-size: 8.5pt; } .muted { color: ${T.muted}; }
-.fig { margin: 4mm 0; page-break-inside: avoid; } .fig figcaption { font-size: 9pt; color: ${T.ink2}; margin-top: 1mm; }
-.two { display: flex; gap: 6mm; } .two > * { flex: 1; }
-table.list { border-collapse: collapse; width: 100%; font-size: 8.5pt; } table.list th, table.list td { border: 1px solid ${T.grid}; padding: 1.2mm 1.5mm; vertical-align: top; }
-table.list th { background: #EEF3FA; } .c { text-align: center; } .nw { white-space: nowrap; } a { color: inherit; text-decoration: none; }
-.pb { page-break-before: always; } .note { font-size: 8.5pt; color: ${T.ink2}; }
-</style></head><body><div class="page">
-<div class="cover"><div class="kicker">과학기술정책 동향 조사 보고서</div><h1>${escHtml(data.title)}</h1>
-<div class="meta">조사기간 ${fmtD(inputs.start)} ~ ${fmtD(inputs.end)} │ 키워드: ${escHtml(inputs.keywords.join(', '))}<br>발간일 ${fmtD(new Date().toISOString().slice(0, 10))} │ 신흥기술영향평가 2인1조 (실행 ${escHtml(runId)})</div></div>
-${kpis}
-<div class="box"><h2>핵심 요약</h2>${data.summary.map((s) => `<p class="b1">◇ ${escHtml(s.text)}${ref(s.refs)}</p>`).join('')}</div>
-<h2>Ⅰ. 조사 개요</h2>
-${fig('topics', charts.topics, '[그림 1] 주제별 자료 수')}
-${fig('months', charts.months, '[그림 2] 월별 자료 수')}
-${fig('kinds', charts.kinds, '[그림 3] 출처 유형별 비중')}
-${fig('regions', charts.regions, '[그림 4] 국내·해외 비중')}
-<div class="pb"></div>
-${fig('orgs', charts.orgs, '[그림 5] 자료가 많은 기관 상위 10곳')}
-<figure class="fig">${heat}<figcaption>[표 1] 주제 × 월별 자료 수</figcaption></figure>
-<h2>Ⅱ. 주제별 주요 동향</h2>${topicSecs}
-<h2>Ⅲ. 시사점</h2>${data.implications.length ? bullets(data.implications) : '<p class="b1 muted">○ (자동 작성된 시사점 없음 — 대시보드에서 직접 작성)</p>'}
-<h2 class="pb">붙임. 조사자료 목록 (${items.length}건)</h2>
-<table class="list"><tr><th>No.</th><th>날짜</th><th>주제</th><th>자료제목</th><th>출처기관</th><th>구분</th></tr>${listRows}</table>
-<p class="note">※ 모든 자료는 링크 검증기(정상 응답·제목 일치·원문 게시일)를 통과한 것만 실었음. 검증 통과 ${verifyStats.verified}건, 보류 ${verifyStats.pending}건, 제외 ${verifyStats.rejected}건. 본문의 [번호]는 붙임 목록 번호임.${data.dropped.length ? ` 근거와 맞지 않아 뺀 자동 작성 문장 ${data.dropped.length}개.` : ''}${hwp ? ' 원문 링크는 함께 내보낸 CSV·PDF에 있음.' : ''}</p>
-</div></body></html>`;
-  if (!hwp) return html;
-  return html.replace(/<style>[\s\S]*?<\/style>/, `<style>${HWP_CSS}</style>`)
-    .replace(/<div class="pb"><\/div>/g, '<p class="pb">@@PB@@</p>').replace(/<h2 class="pb">/g, '<p class="pb">@@PB@@</p><h2>')
-    .replace(/<figcaption>/g, '<p class="cap" style="text-align:left">').replace(/<\/figcaption>/g, '</p>').replace(/<figure class="fig">/g, '<div>').replace(/<\/figure>/g, '</div>')
-    .replace(/<div class="cover"><div class="kicker">([\s\S]*?)<\/div><h1>([\s\S]*?)<\/h1>\s*<div class="meta">([\s\S]*?)<\/div><\/div>/, '<p style="text-align:center;font-size:10pt;color:#52514e">$1</p><h1 style="text-align:center">$2</h1><p style="text-align:center;font-size:9pt;color:#52514e">$3</p>')
-    .replace(/<table class="kpis" style="width:100%">/, '<table class="kpis" width="600" style="width:150mm">').replace(/<td class="kpi" style="text-align:center">/g, '<td class="kpi" width="150" style="text-align:center">')
-    .replace(/<h([123])([^>]*)>/g, (m, n, a) => `<h${n}${a.includes('style=') ? a.replace('style="', 'style="font-family:\'맑은 고딕\';') : `${a} style="font-family:'맑은 고딕'"`}>`)
-    .replace(/style="width:100%"/g, 'style="width:150mm"').replace('<table class="list">', '<table class="list" style="width:150mm">').replace(/border-collapse:collapse;font-size:12px;width:100%/, 'border-collapse:collapse;font-size:12px;width:150mm');
-}
+  // Ⅲ. 시사점
+  h += PB + P('h1', 'Ⅲ. 시사점');
+  if (data.implications.length) {
+    for (const m of data.implications) {
+      h += P('h3', `□ ${m.keyword ? `(${escHtml(m.keyword)}) ` : ''}${escHtml(m.title)}`);
+      for (const p of m.points) h += P('b1', `○ ${escHtml(p.text)}${ref(p.refs)}`);
+    }
+  } else h += P('b1', '○ 자동 작성된 시사점이 없음 — 조사 자료를 바탕으로 직접 작성 필요');
+  h += fig('orgs', '[그림 5] 자료가 많은 기관 상위 10곳');
 
-export const CHART_SIZES = { topics: 620, months: 620, kinds: 620, regions: 620, orgs: 620 };
+  // 붙임
+  h += PB + P('h1', `붙임. 수집 자료 목록 (${items.length}건)`);
+  h += P('src', `※ 전체 요약과 원문 링크는 「조사자료목록.csv」 참조${hwp ? '' : ' · 제목을 누르면 원문이 열림'}`);
+  h += table(['No.', '주제', '날짜', '기관', '제목'], items.map((it) => [it.no, escHtml(it.topic), it.date, escHtml(it.org), hwp ? escHtml(it.title) : `<a href="${escHtml(it.url)}" style="color:#111111; text-decoration:none">${escHtml(it.title)}</a>`]), [10, 24, 20, 32, 64]);
+  const checks = [
+    `모든 자료는 링크 검증기(정상 응답·제목 일치·원문 키워드·원문 게시일)를 통과한 것만 실었음 — 통과 ${verifyStats.verified}건, 보류 ${verifyStats.pending}건, 제외 ${verifyStats.rejected}건`,
+    verifyStats.pending ? `검증 보류 ${verifyStats.pending}건(접속 차단·날짜 미확인 등)은 본문에 넣지 않았으므로 필요하면 직접 확인` : null,
+    data.dropped.length ? `근거와 맞지 않아 뺀 자동 작성 문장 ${data.dropped.length}개` : null,
+    data.generatedBy === 'template' ? '자동 작성 문안을 쓰지 못해 요약·동향은 자료 제목 위주로 정리됨' : null,
+    '예산·계획 수치는 원문 발표 시점 기준이며, 이후 확정·변경 여부는 확인 필요',
+  ].filter(Boolean);
+  h += P('src', '※ 확인 필요: ' + checks.map((c, i) => `${'①②③④⑤⑥'[i]}${c}`).join(' '));
+
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escHtml(data.title)}</title>${hwp ? '' : '<style>@page { size: A4; margin: 18mm 18mm; } body { margin: 0; background: #fff; color: #111; } .page { max-width: 172mm; margin: 0 auto; } svg { max-width: 100%; height: auto; }</style>'}</head><body><div class="page">${h}</div></body></html>`;
+}

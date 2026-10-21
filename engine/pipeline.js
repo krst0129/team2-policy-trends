@@ -8,10 +8,9 @@ import { claudeStatus } from './claude.js';
 import { collectRegion, translateKeywords } from './collectors.js';
 import { verifyAll, dedupeByTitle } from './verify.js';
 import { classify, keywordClusters } from './classify.js';
-import { buildReportData, renderReportHtml } from './report.js';
-import { toPdf, toHwpx, chartsToPng } from './export.js';
+import { buildReportData, renderReportHtml, reportCharts } from './report.js';
+import { toPdf, toHwpx, chartsToPng, exportCaps } from './export.js';
 import { buildSnapshot } from './snapshot.js';
-import { hbar, columns, stack100, topicCounts, monthly, SOURCE_KIND, LIGHT } from '../dashboard/charts.js';
 
 export const REGIONS = ['domestic', 'overseas'];
 const busy = new Set();
@@ -24,7 +23,35 @@ export function claudeInfo(force = false) {
 const dir = (id) => path.join(RUNS, id);
 const statusPath = (id) => path.join(dir(id), '진행상태.json');
 export const getStatus = (id) => readJson(statusPath(id));
-function saveStatus(st) { st.updatedAt = now(); writeJson(statusPath(st.id), st); }
+// ---- progress (0–100%) ----
+// Each active region = collect (0–45) + verify (45–100); regions together are 80% of
+// the run, publishing (merge · classify · write · render) is the last 20%.
+const STEPS = [['collect', '자료 수집'], ['verify', '링크 검증'], ['classify', '주제 분류'], ['write', '보고서 작성'], ['publish', '발간']];
+function computeProgress(st) {
+  const active = REGIONS.filter((r) => st.regions[r]?.state !== 'skipped');
+  const rp = (r) => { const x = st.regions[r]; return x.state === 'done' ? 100 : x.pct || 0; };
+  const regionAvg = active.length ? active.reduce((a, r) => a + rp(r), 0) / active.length : 100;
+  const pub = st.stage === 'published' ? 100 : st.publishPct || 0;
+  const overall = st.stage === 'published' ? 100 : Math.min(99, Math.round(regionAvg * 0.8 + pub * 0.2));
+  const phaseOf = (x) => (x.state === 'done' ? 2 : x.phase === 'verify' ? 1 : x.state === 'running' ? 0 : -1);
+  const minReg = active.length ? Math.min(...active.map((r) => phaseOf(st.regions[r]))) : 2;
+  const pubStep = st.stage === 'published' ? 5 : ({ merge: 2, classify: 2, write: 3, render: 4 }[st.publishPhase] ?? (minReg >= 2 ? 2 : -1));
+  const cur = st.stage === 'published' ? 5 : minReg < 2 ? Math.max(0, minReg) : pubStep;
+  st.progress = {
+    overall,
+    label: st.stage === 'published' ? '발간 완료' : st.stage === 'waiting' ? '상대 영역 넘김 · 대기 중' : st.stage === 'error' ? '오류' : st.phaseText || '진행 중',
+    steps: STEPS.map(([id, label], i) => ({ id, label, state: i < cur ? 'done' : i === cur ? (st.stage === 'waiting' && i < 2 ? 'wait' : 'now') : 'todo' })),
+  };
+}
+function saveStatus(st) { st.updatedAt = now(); computeProgress(st); writeJson(statusPath(st.id), st); }
+const lastSave = new Map();
+function setProgress(id, mut, force = false) {
+  const st = getStatus(id); if (!st) return;
+  mut(st);
+  if (!force && Date.now() - (lastSave.get(id) || 0) < 400) { computeProgress(st); return; }
+  lastSave.set(id, Date.now());
+  saveStatus(st);
+}
 function logTo(st, region, msg) {
   const line = `[${new Date().toLocaleTimeString('ko-KR', { hour12: false })}] ${region ? (region === 'domestic' ? '국내' : '해외') + ' · ' : ''}${msg}`;
   st.log = [...(st.log || []), line].slice(-300);
@@ -107,13 +134,14 @@ async function runRegion(id, region, runner) {
     if (region === 'overseas' && !inputs.keywordsEn.length) {
       inputs.keywordsEn = claudeOk ? await translateKeywords(inputs.keywords, workDir, log) : inputs.keywords.filter((k) => /^[\x00-\x7F]+$/.test(k));
     }
-    const { candidates, skipped } = await collectRegion(region, inputs, src.sources, src.groups, { workDir, log, claudeOk });
+    const prog = (phase, lo, hi) => (f, text) => setProgress(id, (s) => { s.regions[region].phase = phase; s.regions[region].pct = Math.round(lo + (hi - lo) * Math.max(0, Math.min(1, f))); s.regions[region].phaseText = text; s.phaseText = `${region === 'domestic' ? '국내' : '해외'} · ${text}`; });
+    const { candidates, skipped } = await collectRegion(region, inputs, src.sources, src.groups, { workDir, log, claudeOk, onProgress: prog('collect', 0, 45) });
     writeJson(path.join(dir(id), '원자료', `후보_${region}.json`), candidates);
-    const ver = await verifyAll(candidates, inputs.start, inputs.end, [...inputs.keywords, ...inputs.keywordsEn], log);
+    const ver = await verifyAll(candidates, inputs.start, inputs.end, [...inputs.keywords, ...inputs.keywordsEn], log, prog('verify', 45, 100));
     const stamp = (x) => ({ ...x, collectedBy: memberName(runner), collectedAt: now() });
     writeJson(path.join(dir(id), `영역결과_${region}.json`), { region, by: memberName(runner), finishedAt: now(), keywordsEn: inputs.keywordsEn, skipped, verified: ver.verified.map(stamp), pending: ver.pending.map(stamp), rejected: ver.rejected.map(stamp) });
     const s2 = getStatus(id);
-    s2.regions[region] = { ...s2.regions[region], state: 'done', finishedAt: now(), counts: { candidates: candidates.length, verified: ver.verified.length, pending: ver.pending.length, rejected: ver.rejected.length }, skipped };
+    s2.regions[region] = { ...s2.regions[region], state: 'done', pct: 100, phase: 'done', phaseText: '완료', finishedAt: now(), counts: { candidates: candidates.length, verified: ver.verified.length, pending: ver.pending.length, rejected: ver.rejected.length }, skipped };
     saveStatus(s2);
     log(`영역 완료 — 통과 ${ver.verified.length}건`);
   } catch (e) {
@@ -144,8 +172,15 @@ export function itemsCsv(items) {
 
 async function publish(id) {
   let st = getStatus(id);
-  st.stage = 'publishing'; saveStatus(st);
+  st.stage = 'publishing'; st.publishPct = 0; st.publishPhase = 'merge'; st.phaseText = '두 영역 결과 합치는 중'; saveStatus(st);
   const log = (m) => logTo(getStatus(id), null, m);
+  const pp = (phase, pct, text) => setProgress(id, (s) => { s.publishPhase = phase; s.publishPct = pct; s.phaseText = text; }, true);
+  // Claude steps give no intermediate signal: advance by elapsed time toward the step's end
+  const timed = async (phase, lo, hi, text, estMs, fn) => {
+    const t0 = Date.now(); pp(phase, lo, text);
+    const tick = setInterval(() => pp(phase, Math.round(lo + (hi - lo) * Math.min(0.92, (Date.now() - t0) / estMs)), text), 2000);
+    try { return await fn(); } finally { clearInterval(tick); pp(phase, hi, text); }
+  };
   const topics = config('topics.json').topics;
   const parts = REGIONS.map((r) => readJson(path.join(dir(id), `영역결과_${r}.json`))).filter(Boolean);
   const verified = dedupeByTitle(parts.flatMap((p) => p.verified)).sort((a, b) => b.date.localeCompare(a.date) || a.title.localeCompare(b.title));
@@ -154,49 +189,81 @@ async function publish(id) {
   log(`발간 시작 — 합친 자료 ${verified.length}건 (중복 제거 후)`);
   const cl = claudeInfo();
   const workDir = path.join(dir(id), '원자료', 'claude_report');
-  await classify(verified, topics, { claudeOk: cl.loggedIn, workDir, log });
+  await timed('classify', 10, 35, '주제 분류 중', cl.loggedIn ? 60000 : 2000, () => classify(verified, topics, { claudeOk: cl.loggedIn, workDir, log }));
   const clusters = keywordClusters(verified);
   const inputs = st.inputs;
   const verifyStats = { verified: verified.length, pending: pending.length, rejected: rejected.length };
-  const data = await buildReportData(inputs, verified, topics, { claudeOk: cl.loggedIn, workDir, log });
+  const data = await timed('write', 35, 85, '보고서 문안 작성 중', cl.loggedIn ? 120000 : 2000, () => buildReportData(inputs, verified, topics, { claudeOk: cl.loggedIn, workDir, log }));
+  pp('render', 90, '보고서 만드는 중');
   writeJson(path.join(dir(id), 'items.json'), { items: verified, pending, clusters, verifyStats });
   writeJson(path.join(dir(id), '검증기록.json'), { checkedAt: now(), stats: verifyStats, rules: '정상 응답(2xx) + 페이지 내 제목 일치 + 원문 게시일이 조사기간 안', verified: verified.map(({ no, title, url, date, dateSource, httpStatus, pageTitle }) => ({ no, title, url, date, dateSource, httpStatus, pageTitle })), pending: pending.map(({ title, url, reason }) => ({ title, url, reason })), rejected: rejected.map(({ title, url, reason }) => ({ title, url, reason })), reportDropped: data.dropped, skippedSources: parts.flatMap((p) => p.skipped || []) });
   fs.writeFileSync(path.join(dir(id), '조사자료목록.csv'), itemsCsv(verified), 'utf8');
   writeJson(path.join(dir(id), 'report.json'), data);
+  // drop stale exports from an earlier publish of this run
+  for (const f of Object.values(OUT)) fs.rmSync(path.join(dir(id), f), { force: true });
   const html = renderReportHtml({ inputs, items: verified, topics, data, verifyStats, runId: id });
   fs.writeFileSync(path.join(dir(id), '정책조사보고서.html'), html, 'utf8');
+  // make every export now, so the serverless result page can carry them (A안)
+  const sub = (lo, hi, label) => (pct, text) => pp('render', Math.round(lo + (hi - lo) * pct / 100), `${label} · ${text}`);
+  for (const [fmt, lo, hi, label] of [['pdf', 86, 89, 'PDF 만드는 중'], ['hwpx', 89, 97, '한글(hwpx) 만드는 중'], ['web', 97, 99, '결과 웹페이지 만드는 중']]) {
+    if (fmt === 'hwpx' && !exportCaps().hwpx) { log('한글 프로그램이 없어 hwpx는 건너뜀'); continue; }
+    try { await exportReport(id, fmt, sub(lo, hi, label), { reuse: false }); }
+    catch (e) { log(`${label.replace(' 만드는 중', '')} 생성 실패: ${e.message} — 대시보드에서 다시 내보내기 가능`); }
+  }
   st = getStatus(id);
-  st.stage = 'published'; st.publishedAt = now(); st.title = data.title; st.counts = verifyStats; delete st.error;
+  st.stage = 'published'; st.publishPct = 100; st.publishPhase = 'done'; st.phaseText = '발간 완료'; st.publishedAt = now(); st.title = data.title; st.counts = verifyStats; delete st.error;
   saveStatus(st);
   log(`발간 완료 — ${data.title}`);
 }
 
-export async function exportReport(id, fmt) {
+// ---- exports run as background jobs so the dashboard can show 0–100% ----
+const jobs = new Map(); // `${id}:${fmt}` -> { pct, text, done, file, error, startedAt }
+export const exportStatus = (id, fmt) => jobs.get(`${id}:${fmt}`) || null;
+export function startExport(id, fmt) {
+  const key = `${id}:${fmt}`;
+  const cur = jobs.get(key);
+  if (cur && !cur.done) return cur;
+  const job = { fmt, pct: 0, text: '준비 중', done: false, startedAt: now() };
+  jobs.set(key, job);
+  const set = (pct, text) => { job.pct = Math.max(job.pct, Math.round(pct)); job.text = text; };
+  exportReport(id, fmt, set)
+    .then((f) => { set(100, '완료'); job.file = path.basename(f); job.done = true; })
+    .catch((e) => { job.error = e.message; job.text = '실패: ' + e.message; job.done = true; });
+  return job;
+}
+// a step with no progress signal: creep toward `hi` over `estMs`
+async function creep(set, lo, hi, text, estMs, fn) {
+  const t0 = Date.now(); set(lo, text);
+  const tick = setInterval(() => set(lo + (hi - lo) * Math.min(0.95, (Date.now() - t0) / estMs), text), 500);
+  try { return await fn(); } finally { clearInterval(tick); set(hi, text); }
+}
+
+const OUT = { pdf: '정책조사보고서.pdf', hwpx: '정책조사보고서.hwpx', web: '조사결과_대시보드.html' };
+export async function exportReport(id, fmt, set = () => {}, { reuse = true } = {}) {
   const d = dir(id), html = path.join(d, '정책조사보고서.html');
   if (!fs.existsSync(html)) throw new Error('아직 발간되지 않았습니다');
+  // made at publish time already and still current → hand it over at once
+  const out = OUT[fmt] && path.join(d, OUT[fmt]);
+  if (reuse && fmt !== 'web' && out && fs.existsSync(out) && fs.statSync(out).mtimeMs >= fs.statSync(html).mtimeMs) { set(100, '발간 때 만든 파일'); return out; }
   const tmp = path.join(d, '원자료', 'export'); fs.mkdirSync(tmp, { recursive: true });
-  if (fmt === 'pdf') return toPdf(html, path.join(d, '정책조사보고서.pdf'), tmp);
-  if (fmt === 'web') return buildSnapshot(d, id);
+  if (fmt === 'pdf') return creep(set, 10, 95, 'PDF로 인쇄 중', 6000, () => toPdf(html, path.join(d, '정책조사보고서.pdf'), tmp));
+  if (fmt === 'web') { set(30, '웹페이지 만드는 중'); return buildSnapshot(d, id); }
   if (fmt === 'hwpx') {
+    set(5, '자료 불러오는 중');
     const { items, verifyStats } = readJson(path.join(d, 'items.json'));
     const data = readJson(path.join(d, 'report.json'));
     const topics = config('topics.json').topics;
     const st = getStatus(id);
-    const kinds = ['정부·공공기관', '연구기관·보고서', '언론'].map((k) => ({ label: k, value: items.filter((i) => SOURCE_KIND(i.type) === k).length }));
-    const regions = [{ label: '국내', value: items.filter((i) => i.region === 'domestic').length }, { label: '해외', value: items.filter((i) => i.region === 'overseas').length }];
-    const orgMap = new Map(); for (const i of items) orgMap.set(i.org, (orgMap.get(i.org) || 0) + 1);
-    const orgs = [...orgMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => ({ key: k, label: k.length > 16 ? k.slice(0, 15) + '…' : k, value: v }));
-    const svgs = {
-      topics: hbar(topicCounts(items, topics).filter((c) => c.value), { theme: LIGHT, width: 620 }),
-      months: columns(monthly(items, st.inputs.start, st.inputs.end), { theme: LIGHT, width: 620, height: 200 }),
-      kinds: stack100(kinds, { theme: LIGHT, width: 620 }),
-      regions: stack100(regions, { theme: LIGHT, width: 620 }),
-      orgs: hbar(orgs, { theme: LIGHT, width: 620, labelW: 170, rowH: 26 }),
-    };
-    const imgs = await chartsToPng(svgs, path.join(d, '그림'), tmp);
+    const svgs = reportCharts(items, st.inputs, topics);
+    const ids = Object.keys(svgs), imgs = {};
+    for (let k = 0; k < ids.length; k++) {
+      set(10 + (k / ids.length) * 40, `그래프 이미지 만드는 중 (${k + 1}/${ids.length})`);
+      Object.assign(imgs, await chartsToPng({ [ids[k]]: svgs[ids[k]] }, path.join(d, '그림'), tmp));
+    }
+    set(52, '한글 문서용 본문 만드는 중');
     const hwpHtml = path.join(tmp, 'report_hwp.html');
     fs.writeFileSync(hwpHtml, renderReportHtml({ inputs: st.inputs, items, topics, data, verifyStats, runId: id }, { chartImg: imgs, hwp: true }), 'utf8');
-    return toHwpx(hwpHtml, path.join(d, '정책조사보고서.hwpx'), tmp);
+    return creep(set, 55, 97, '한글 프로그램으로 변환 중', 25000, () => toHwpx(hwpHtml, path.join(d, '정책조사보고서.hwpx'), tmp));
   }
   throw new Error('지원하지 않는 형식');
 }

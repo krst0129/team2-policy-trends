@@ -110,6 +110,28 @@ button, .button { font: inherit; font-size: 13px; border-radius: 8px; padding: 7
 .state-handed::before { content: "⇄ "; color: var(--warn); } .state-error::before { content: "✕ "; color: var(--critical); } .state-skipped::before { content: "– "; color: var(--text-muted); }
 .log { background: var(--chip); border-radius: 8px; padding: 8px 10px; font: 11.5px/1.5 ui-monospace, Consolas, monospace; max-height: 160px; overflow: auto; white-space: pre-wrap; color: var(--text-secondary); }
 
+/* progress (0–100%) */
+.progress { margin: 4px 0 12px; }
+.progress.small { margin: 12px 0 0; }
+.progress-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+.progress-top b { font-size: 22px; color: var(--text-primary); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.progress.small .progress-top b { font-size: 16px; }
+.bar { height: 12px; background: var(--chip); border-radius: 999px; overflow: hidden; }
+.progress.small .bar { height: 8px; }
+.bar span { display: block; height: 100%; width: 0; background: var(--series-1); border-radius: 999px; transition: width .6s ease; }
+.bar.done span { background: var(--good); } .bar.err span { background: var(--critical); }
+.bar.live span { background-image: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.35) 50%, rgba(255,255,255,0) 100%); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .bar span { transition: none; } .bar.live span { animation: none; } }
+.steps { list-style: none; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 10px 0 0; padding: 0; }
+.steps li { font-size: 12px; text-align: center; padding: 6px 4px; border-radius: 8px; background: var(--chip); color: var(--text-muted); }
+.steps li::before { display: block; font-size: 13px; font-weight: 700; margin-bottom: 1px; }
+.steps li.done { color: var(--text-primary); } .steps li.done::before { content: "✓"; color: var(--good); }
+.steps li.now { background: var(--wash); color: var(--accent); font-weight: 700; } .steps li.now::before { content: "●"; }
+.steps li.wait { background: var(--wash); color: var(--text-secondary); } .steps li.wait::before { content: "⇄"; color: var(--warn); }
+.steps li.todo::before { content: "○"; }
+.region .bar { height: 6px; margin-top: 6px; }
+
 /* charts */
 .chart { overflow-x: auto; } .chart .hit:hover path, .chart .hit:focus path { filter: brightness(1.12); } .chart .hit:focus { outline: none; }
 .clusters { display: flex; flex-wrap: wrap; gap: 6px; }

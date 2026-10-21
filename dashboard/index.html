@@ -57,6 +57,11 @@
       </div>
       <section class="card" id="statusCard">
         <div class="card-h"><h2>진행 상태</h2><div class="btn-row" id="statusActions" style="margin:0"></div></div>
+        <div class="progress" id="runProgress" hidden>
+          <div class="progress-top"><span id="runProgressLabel">진행 중</span><b id="runProgressPct">0%</b></div>
+          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="runBar"><span id="runBarFill"></span></div>
+          <ol class="steps" id="runSteps"></ol>
+        </div>
         <div id="statusBox"><p class="empty">아직 실행한 조사가 없습니다</p></div>
       </section>
     </div>
@@ -96,10 +101,15 @@
       <div class="btn-row" style="margin:0">
         <button id="expHwpx" class="primary">hwpx</button>
         <button id="expPdf" class="primary">PDF</button>
-        <button id="expWeb" class="primary" title="서버 없이 어디서나 열리는 결과 웹페이지(HTML 한 장)">웹페이지</button>
+        <button id="expWeb" class="primary" title="서버 없이 열리는 결과 웹페이지 한 장. hwpx·PDF·CSV 내보내기가 그 안에 들어 있음">결과 웹페이지(내보내기 도구)</button>
         <button id="pushBtn" class="ghost">GitHub에 올리기</button>
       </div>
+      <div class="progress small" id="expProgress" hidden>
+        <div class="progress-top"><span id="expProgressLabel"></span><b id="expProgressPct">0%</b></div>
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="expBar"><span id="expBarFill"></span></div>
+      </div>
       <div id="expMsg" class="msg"></div>
+      <p class="hint" style="margin-top:6px">hwpx·PDF·결과 웹페이지는 발간할 때 함께 만들어 두므로 바로 내려받습니다. 결과 웹페이지 한 장만 있으면 서버 없이도 보고서 hwpx·PDF·CSV를 내보낼 수 있습니다.</p>
     </section>
   </div>
 </main>
