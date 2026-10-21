@@ -1,5 +1,5 @@
 {
-  "_설명": "자료조사처 목록. method: koreakr/naver/google/gdelt/fedreg/govuk 는 엔진이 직접 수집, claude 는 Claude Code가 domains 안에서 검색·열람해 후보를 찾는다. 어떤 방법으로 찾든 링크 검증기를 통과해야 목록에 들어간다.",
+  "_설명": "자료조사처 목록. method: koreakr/naver/google/gdelt/fedreg/govuk/rss 는 엔진이 직접 수집, claude 는 Claude Code가 domains 안에서 검색·열람해 후보를 찾는다. 어떤 방법으로 찾든 링크 검증기를 통과해야 목록에 들어간다.",
   "groups": [
     { "id": "dom_gov", "region": "domestic", "name": "정부·공공기관 보도자료" },
     { "id": "dom_pres", "region": "domestic", "name": "대통령실·국가과학기술자문회의" },
@@ -22,6 +22,7 @@
     { "id": "google", "group": "dom_press", "name": "Google 검색 API", "method": "google", "type": "뉴스 기사", "needs": ["GOOGLE_API_KEY", "GOOGLE_CSE_ID"] },
     { "id": "fedreg", "group": "ovs_gov", "name": "미국 Federal Register", "method": "fedreg", "type": "보도자료", "url": "https://www.federalregister.gov" },
     { "id": "govuk", "group": "ovs_gov", "name": "영국 GOV.UK", "method": "govuk", "type": "보도자료", "url": "https://www.gov.uk" },
+    { "id": "ovs_rss", "group": "ovs_gov", "name": "미국 NSF·NIST·에너지부, EU 집행위 보도자료 RSS", "method": "rss", "type": "보도자료", "note": "RSS는 최근 게시물만 담고 있어 최근 자료 위주로 잡힌다", "feeds": [{ "org": "U.S. National Science Foundation (NSF)", "country": "United States", "url": "https://www.nsf.gov/rss/rss_www_news.xml" }, { "org": "U.S. National Institute of Standards and Technology (NIST)", "country": "United States", "url": "https://www.nist.gov/news-events/news/rss.xml" }, { "org": "U.S. Department of Energy", "country": "United States", "url": "https://www.energy.gov/rss/newsroom.xml" }, { "org": "European Commission (Press Corner)", "country": "European Union", "url": "https://ec.europa.eu/commission/presscorner/api/rss?language=en" }, { "org": "European Commission (Research and Innovation)", "country": "European Union", "url": "https://research-and-innovation.ec.europa.eu/node/2/rss_en" }] },
     { "id": "ovs_gov_web", "group": "ovs_gov", "name": "미국 백악관·NSF·상무부, EU 집행위, 일본 내각부·경제산업성·문부과학성, 중국 국무원·과학기술부", "method": "claude", "type": "보도자료", "domains": ["whitehouse.gov", "nsf.gov", "commerce.gov", "ec.europa.eu", "commission.europa.eu", "cao.go.jp", "meti.go.jp", "mext.go.jp", "gov.cn", "most.gov.cn"] },
     { "id": "ovs_research", "group": "ovs_research", "name": "OECD·각국 정책 보고서", "method": "claude", "type": "해외 정책자료", "domains": ["oecd.org", "nist.gov", "nber.org", "brookings.edu", "rieti.go.jp", "bruegel.org"] },
     { "id": "gdelt", "group": "ovs_press", "name": "GDELT(전 세계 언론 색인)", "method": "gdelt", "type": "해외 언론", "note": "GDELT 기사 검색은 최근 약 3개월까지만 지원" }
